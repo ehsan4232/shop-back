@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=dev-secret-key
+      - DATABASE_URL=postgresql://mall_user:mall_pass@db:5432/mall_db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/app
+      - media_volume:/app/media
+    command: python manage.py runserver 0.0.0.0:8000
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: mall_db
+      POSTGRES_USER: mall_user
+      POSTGRES_PASSWORD: mall_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  celery:
+    build: .
+    command: celery -A mall worker -l info
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=dev-secret-key
+      - DATABASE_URL=postgresql://mall_user:mall_pass@db:5432/mall_db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
+  media_volume:
