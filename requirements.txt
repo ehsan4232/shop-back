@@ -1,0 +1,42 @@
+# Django Core
+Django==4.2.7
+djangorestframework==3.14.0
+django-cors-headers==4.3.1
+django-filter==23.3
+drf-spectacular==0.26.5
+
+# Database
+psycopg2-binary==2.9.8
+django-redis==5.4.0
+
+# Authentication & Security
+django-otp==1.1.6
+PyJWT==2.8.0
+cryptography==41.0.7
+
+# Multi-tenancy
+django-mptt==0.15.0
+
+# File Storage
+django-storages==1.14.2
+Pillow==10.1.0
+
+# Background Tasks
+celery==5.3.4
+redis==5.0.1
+
+# Persian Language Support
+python-bidi==0.4.2
+
+# API & Social Media
+requests==2.31.0
+
+# Development
+django-debug-toolbar==4.2.0
+
+# Production
+gunicorn==21.2.0
+
+# Testing
+pytest==7.4.3
+pytest-django==4.7.0
