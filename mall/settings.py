@@ -42,17 +42,22 @@ LOCAL_APPS = [
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-# Middleware
+# Middleware (Updated with tenant middleware)
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'mall.middleware.SecurityMiddleware',  # Custom security middleware
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django_otp.middleware.OTPMiddleware',
+    'mall.middleware.TenantMiddleware',  # Tenant detection
+    'mall.middleware.StoreRequiredMiddleware',  # Store validation
+    'mall.middleware.StoreContextMiddleware',  # Store context
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'mall.middleware.RequestLoggingMiddleware',  # Analytics logging
 ]
 
 ROOT_URLCONF = 'mall.urls'
@@ -160,11 +165,20 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
-# CORS
+# CORS - Updated for multi-tenant
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://mall.ir",
+    "https://www.mall.ir",
 ]
+
+# Allow all subdomains in development
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    # Dynamic CORS is handled by custom middleware
+    CORS_REPLACE_HTTPS_REFERER = True
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -174,7 +188,20 @@ CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
-CELERY_BEAT_SCHEDULE = {}
+CELERY_BEAT_SCHEDULE = {
+    'update-category-product-counts': {
+        'task': 'apps.products.tasks.update_all_category_counts',
+        'schedule': 300.0,  # Every 5 minutes
+    },
+    'update-brand-product-counts': {
+        'task': 'apps.products.tasks.update_all_brand_counts',
+        'schedule': 300.0,  # Every 5 minutes
+    },
+    'cleanup-expired-otps': {
+        'task': 'apps.accounts.tasks.cleanup_expired_otps',
+        'schedule': 3600.0,  # Every hour
+    },
+}
 
 # Social Media Integration
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
@@ -214,6 +241,13 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+    
+    # Content Security Policy
+    CSP_DEFAULT_SRC = ("'self'",)
+    CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "fonts.googleapis.com")
+    CSP_FONT_SRC = ("'self'", "fonts.gstatic.com")
+    CSP_IMG_SRC = ("'self'", "data:", "*.instagram.com", "*.telegra.ph")
+    CSP_SCRIPT_SRC = ("'self'", "www.google-analytics.com", "www.googletagmanager.com")
 
 # OTP Settings
 OTP_TOTP_ISSUER = 'Mall Platform'
@@ -223,6 +257,8 @@ OTP_LOGIN_URL = '/admin/login/'
 SESSION_COOKIE_AGE = 86400  # 1 day
 SESSION_SAVE_EVERY_REQUEST = True
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SESSION_COOKIE_DOMAIN = None  # Will be set dynamically by middleware
+SESSION_COOKIE_SECURE = not DEBUG  # Only over HTTPS in production
 
 # Logging
 LOGGING = {
@@ -250,6 +286,12 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'simple',
         },
+        'tenant': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'tenant.log',
+            'formatter': 'verbose',
+        },
     },
     'loggers': {
         'django': {
@@ -262,8 +304,25 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+        'mall.middleware': {
+            'handlers': ['tenant', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
 
 # Create logs directory if it doesn't exist
 (BASE_DIR / 'logs').mkdir(exist_ok=True)
+
+# Tenant-specific settings
+TENANT_APPS = [
+    'apps.stores',
+    'apps.products',
+    'apps.orders',
+    'apps.social_media',
+]
+
+# Multi-tenant settings
+TENANT_MODEL = 'stores.Store'
+TENANT_DOMAIN_MODEL = 'stores.Store'
