@@ -14,6 +14,7 @@ urlpatterns = [
     path('import-posts/', views.import_posts_from_social, name='import-posts'),
     path('import-to-product/', views.import_posts_to_product, name='import-to-product'),
     
-    # Statistics
+    # Statistics and Sessions
     path('statistics/', views.social_media_statistics, name='social-statistics'),
+    path('sessions/<uuid:session_id>/', views.get_import_session, name='import-session-detail'),
 ]
