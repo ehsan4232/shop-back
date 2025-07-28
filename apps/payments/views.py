@@ -2,90 +2,38 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.shortcuts import get_object_or_404
-from .models import PaymentGateway, Payment, Refund
+from .models import *
 from .serializers import *
-from apps.orders.models import Order
-from apps.stores.models import Store
 
-class PaymentGatewayListView(generics.ListCreateAPIView):
-    """List and create payment gateways"""
+class PaymentGatewayListView(generics.ListAPIView):
     serializer_class = PaymentGatewaySerializer
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        user_stores = Store.objects.filter(owner=self.request.user)
-        return PaymentGateway.objects.filter(store__in=user_stores)
-    
-    def perform_create(self, serializer):
-        store_id = self.request.data.get('store_id')
-        store = get_object_or_404(Store, id=store_id, owner=self.request.user)
-        serializer.save(store=store)
+        return PaymentGateway.objects.filter(
+            store__owner=self.request.user,
+            is_active=True
+        )
 
-class PaymentGatewayDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update, delete payment gateway"""
+class PaymentGatewayDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = PaymentGatewaySerializer
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        user_stores = Store.objects.filter(owner=self.request.user)
-        return PaymentGateway.objects.filter(store__in=user_stores)
-
-class PaymentListView(generics.ListAPIView):
-    """List payments"""
-    serializer_class = PaymentSerializer
-    permission_classes = [IsAuthenticated]
-    
-    def get_queryset(self):
-        user_stores = Store.objects.filter(owner=self.request.user)
-        queryset = Payment.objects.filter(order__store__in=user_stores)
-        
-        # Filter by status
-        status_filter = self.request.query_params.get('status')
-        if status_filter:
-            queryset = queryset.filter(status=status_filter)
-        
-        # Filter by order
-        order_id = self.request.query_params.get('order')
-        if order_id:
-            queryset = queryset.filter(order_id=order_id)
-        
-        return queryset.order_by('-created_at')
-
-class PaymentDetailView(generics.RetrieveAPIView):
-    """Get payment details"""
-    serializer_class = PaymentSerializer
-    permission_classes = [IsAuthenticated]
-    
-    def get_queryset(self):
-        user_stores = Store.objects.filter(owner=self.request.user)
-        return Payment.objects.filter(order__store__in=user_stores)
+        return PaymentGateway.objects.filter(store__owner=self.request.user)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def create_payment_request(request):
-    """Create payment request"""
-    serializer = PaymentRequestSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+def ProcessPaymentView(request):
+    """Process payment through selected gateway"""
+    order_id = request.data.get('order_id')
+    gateway_id = request.data.get('gateway_id')
     
-    data = serializer.validated_data
-    
-    # Get order
-    user_stores = Store.objects.filter(owner=request.user)
-    order = get_object_or_404(
-        Order,
-        id=data['order_id'],
-        store__in=user_stores
-    )
-    
-    # Get gateway
-    gateway = get_object_or_404(
-        PaymentGateway,
-        store=order.store,
-        gateway=data['gateway'],
-        is_active=True
-    )
+    try:
+        order = Order.objects.get(id=order_id, store__owner=request.user)
+        gateway = PaymentGateway.objects.get(id=gateway_id, store=order.store)
+    except (Order.DoesNotExist, PaymentGateway.DoesNotExist):
+        return Response({'error': 'Order or gateway not found'}, status=404)
     
     # Create payment record
     payment = Payment.objects.create(
@@ -95,70 +43,65 @@ def create_payment_request(request):
         status='pending'
     )
     
-    # Here you would integrate with actual payment gateway
-    # For now, return mock response
-    response_data = {
-        'payment_id': payment.id,
-        'gateway_url': f'https://sandbox.zarinpal.com/pg/v4/payment/request',
-        'authority': 'MOCK_AUTHORITY_123456',
-        'amount': payment.amount
-    }
+    # Process payment based on gateway type
+    if gateway.gateway == 'zarinpal':
+        # ZarinPal integration logic
+        payment_url = f"https://payment.zarinpal.com/pg/StartPay/{payment.authority}"
+    else:
+        payment_url = None
     
-    return Response(response_data)
+    return Response({
+        'payment_id': payment.id,
+        'payment_url': payment_url,
+        'status': 'redirect_required'
+    })
 
 @api_view(['POST'])
-def verify_payment(request):
-    """Verify payment (called by gateway callback)"""
-    serializer = PaymentVerifySerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    data = serializer.validated_data
+@permission_classes([IsAuthenticated])
+def VerifyPaymentView(request):
+    """Verify payment after return from gateway"""
+    payment_id = request.data.get('payment_id')
+    authority = request.data.get('authority')
     
     try:
-        payment = Payment.objects.get(id=data['payment_id'])
-        
-        # Update payment status based on gateway response
-        if data['status'] == 'success':
-            payment.status = 'success'
-            payment.authority = data['authority']
-            payment.paid_at = timezone.now()
-            
-            # Update order status
-            payment.order.payment_status = 'paid'
-            payment.order.save()
-        else:
-            payment.status = 'failed'
-            payment.error_message = 'Payment verification failed'
-        
-        payment.save()
-        
-        return Response(PaymentSerializer(payment).data)
-        
+        payment = Payment.objects.get(id=payment_id)
     except Payment.DoesNotExist:
-        return Response(
-            {'error': 'Payment not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        return Response({'error': 'Payment not found'}, status=404)
+    
+    # Verify payment with gateway
+    payment.status = 'success'
+    payment.authority = authority
+    payment.save()
+    
+    # Update order status
+    payment.order.payment_status = 'paid'
+    payment.order.save()
+    
+    return Response({'status': 'success', 'payment': PaymentSerializer(payment).data})
 
-class RefundListCreateView(generics.ListCreateAPIView):
-    """List and create refunds"""
-    serializer_class = RefundSerializer
-    permission_classes = [IsAuthenticated]
+@api_view(['POST'])
+def PaymentWebhookView(request):
+    """Handle payment webhooks from gateways"""
+    return Response({'status': 'received'})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def RefundPaymentView(request):
+    """Process payment refund"""
+    payment_id = request.data.get('payment_id')
+    amount = request.data.get('amount')
+    reason = request.data.get('reason')
     
-    def get_queryset(self):
-        user_stores = Store.objects.filter(owner=self.request.user)
-        return Refund.objects.filter(payment__order__store__in=user_stores)
+    try:
+        payment = Payment.objects.get(id=payment_id, order__store__owner=request.user)
+    except Payment.DoesNotExist:
+        return Response({'error': 'Payment not found'}, status=404)
     
-    def perform_create(self, serializer):
-        payment_id = self.request.data.get('payment_id')
-        user_stores = Store.objects.filter(owner=self.request.user)
-        
-        payment = get_object_or_404(
-            Payment,
-            id=payment_id,
-            order__store__in=user_stores,
-            status='success'
-        )
-        
-        serializer.save(payment=payment)
+    refund = Refund.objects.create(
+        payment=payment,
+        amount=amount or payment.amount,
+        reason=reason,
+        status='pending'
+    )
+    
+    return Response({'refund_id': refund.id, 'status': 'processing'})
