@@ -34,7 +34,9 @@ LOCAL_APPS = [
     'apps.stores',
     'apps.products',
     'apps.orders',
-    'apps.social_media',  # Added missing app
+    'apps.social_media',
+    'apps.payments',        # Fixed: Added missing app
+    'apps.communications',  # Fixed: Added missing app
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
