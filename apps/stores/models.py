@@ -1,34 +1,209 @@
 from django.db import models
+from django.core.exceptions import ValidationError
+from django.utils.text import slugify
 from django.conf import settings
-from django.core.validators import RegexValidator
 import uuid
+
+class Tenant(models.Model):
+    """
+    Tenant model for multi-tenancy support
+    Each store operates as a separate tenant
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Schema and domain information
+    schema_name = models.CharField(
+        max_length=63, 
+        unique=True,
+        verbose_name='نام اسکیما',
+        help_text='نام اسکیما پایگاه داده (حروف انگلیسی و خط تیره)'
+    )
+    domain_url = models.CharField(
+        max_length=253, 
+        unique=True,
+        verbose_name='دامنه',
+        help_text='دامنه فروشگاه (مثال: shop.mall.ir یا custom-domain.com)'
+    )
+    
+    # Basic information
+    name = models.CharField(max_length=100, verbose_name='نام')
+    is_active = models.BooleanField(default=True, verbose_name='فعال')
+    is_custom_domain = models.BooleanField(default=False, verbose_name='دامنه اختصاصی')
+    
+    # Resource limits
+    max_products = models.PositiveIntegerField(default=1000, verbose_name='حداکثر محصولات')
+    max_customers = models.PositiveIntegerField(default=1000, verbose_name='حداکثر مشتریان')
+    max_storage_mb = models.PositiveIntegerField(default=1000, verbose_name='حداکثر فضای ذخیره‌سازی (مگابایت)')
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'public_tenant'  # Store in public schema
+        verbose_name = 'مستأجر'
+        verbose_name_plural = 'مستأجرها'
+        indexes = [
+            models.Index(fields=['domain_url']),
+            models.Index(fields=['schema_name']),
+            models.Index(fields=['is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.domain_url})"
+    
+    def clean(self):
+        # Validate schema name
+        if self.schema_name:
+            if not self.schema_name.replace('_', '').replace('-', '').isalnum():
+                raise ValidationError('نام اسکیما باید شامل حروف انگلیسی، اعداد، خط تیره و زیرخط باشد')
+            
+            # Reserved schema names
+            reserved_names = ['public', 'information_schema', 'pg_catalog', 'pg_toast']
+            if self.schema_name.lower() in reserved_names:
+                raise ValidationError('نام اسکیما رزرو شده است')
+        
+        # Validate domain
+        if self.domain_url:
+            self.domain_url = self.domain_url.lower().strip()
+            if not self.domain_url.replace('.', '').replace('-', '').isalnum():
+                raise ValidationError('دامنه نامعتبر است')
+    
+    def save(self, *args, **kwargs):
+        # Auto-generate schema name from domain if not provided
+        if not self.schema_name and self.domain_url:
+            # Extract subdomain for schema name
+            domain_parts = self.domain_url.split('.')
+            if len(domain_parts) > 2 and not self.is_custom_domain:
+                # Subdomain format: shop.mall.ir
+                self.schema_name = slugify(domain_parts[0]).replace('-', '_')
+            else:
+                # Custom domain: use domain name
+                self.schema_name = slugify(domain_parts[0]).replace('-', '_')
+        
+        self.clean()
+        super().save(*args, **kwargs)
+    
+    @property
+    def subdomain(self):
+        """Extract subdomain from domain_url"""
+        if self.is_custom_domain:
+            return None
+        parts = self.domain_url.split('.')
+        return parts[0] if len(parts) > 1 else None
+    
+    def get_usage_stats(self):
+        """Get tenant resource usage statistics"""
+        try:
+            store = self.store
+            return {
+                'products_count': store.products.count(),
+                'customers_count': store.customers.count(),
+                'orders_count': store.orders.count(),
+                'storage_used_mb': self.calculate_storage_usage(),
+                'products_usage_percent': (store.products.count() / self.max_products) * 100,
+                'customers_usage_percent': (store.customers.count() / self.max_customers) * 100,
+            }
+        except:
+            return {
+                'products_count': 0,
+                'customers_count': 0,
+                'orders_count': 0,
+                'storage_used_mb': 0,
+                'products_usage_percent': 0,
+                'customers_usage_percent': 0,
+            }
+    
+    def calculate_storage_usage(self):
+        """Calculate storage usage in MB"""
+        # This would require file system integration
+        # For now, return 0
+        return 0
+    
+    def is_over_limits(self):
+        """Check if tenant is over resource limits"""
+        stats = self.get_usage_stats()
+        return (
+            stats['products_count'] > self.max_products or
+            stats['customers_count'] > self.max_customers or
+            stats['storage_used_mb'] > self.max_storage_mb
+        )
 
 class Store(models.Model):
     """
-    Store model with multi-tenant architecture and theme support as per product description
+    Enhanced Store model with tenant relationship
+    Represents an individual online store within the platform
     """
+    STORE_TYPES = [
+        ('general', 'عمومی'),
+        ('fashion', 'مد و پوشاک'),
+        ('jewelry', 'جواهرات'),
+        ('electronics', 'الکترونیک'),
+        ('home_garden', 'خانه و باغ'),
+        ('beauty', 'زیبایی و بهداشت'),
+        ('sports', 'ورزش'),
+        ('books', 'کتاب و نشریات'),
+        ('food', 'مواد غذایی'),
+        ('automotive', 'خودرو'),
+        ('services', 'خدمات'),
+    ]
+    
+    SUBSCRIPTION_PLANS = [
+        ('free', 'رایگان'),
+        ('basic', 'پایه'),
+        ('pro', 'حرفه‌ای'),
+        ('enterprise', 'سازمانی'),
+    ]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL, 
+    
+    # Tenant relationship
+    tenant = models.OneToOneField(
+        Tenant, 
         on_delete=models.CASCADE,
-        related_name='stores',
-        verbose_name='مالک'
+        related_name='store',
+        verbose_name='مستأجر'
     )
     
-    # Basic Information
-    name = models.CharField(max_length=100, verbose_name='نام فروشگاه')
-    name_fa = models.CharField(max_length=100, verbose_name='نام فارسی فروشگاه')
-    slug = models.SlugField(max_length=100, unique=True, verbose_name='نامک')
-    description = models.TextField(blank=True, verbose_name='توضیحات')
-    description_fa = models.TextField(blank=True, verbose_name='توضیحات فارسی')
+    # Store ownership
+    owner = models.ForeignKey(
+        'accounts.User', 
+        on_delete=models.CASCADE,
+        related_name='owned_stores',
+        verbose_name='مالک فروشگاه'
+    )
     
-    # Visual Identity (as mentioned in product description)
+    # Basic information
+    name = models.CharField(max_length=100, verbose_name='نام فروشگاه')
+    name_fa = models.CharField(max_length=100, verbose_name='نام فارسی')
+    slug = models.SlugField(max_length=100, verbose_name='نامک')
+    description = models.TextField(blank=True, verbose_name='توضیحات')
+    store_type = models.CharField(
+        max_length=20, 
+        choices=STORE_TYPES, 
+        default='general',
+        verbose_name='نوع فروشگاه'
+    )
+    
+    # Subscription and plan
+    subscription_plan = models.CharField(
+        max_length=20, 
+        choices=SUBSCRIPTION_PLANS, 
+        default='free',
+        verbose_name='پلان اشتراک'
+    )
+    subscription_expires_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        verbose_name='انقضای اشتراک'
+    )
+    
+    # Branding and appearance
     logo = models.ImageField(
         upload_to='store_logos/', 
         null=True, 
         blank=True,
-        verbose_name='لوگو',
-        help_text='طراحی لوگوی منحصر به فرد با رنگ‌های قرمز، آبی و سفید'
+        verbose_name='لوگو'
     )
     banner = models.ImageField(
         upload_to='store_banners/', 
@@ -36,393 +211,308 @@ class Store(models.Model):
         blank=True,
         verbose_name='بنر'
     )
-    favicon = models.ImageField(
-        upload_to='store_favicons/', 
-        null=True, 
-        blank=True,
-        verbose_name='آیکون'
+    primary_color = models.CharField(
+        max_length=7, 
+        default='#007bff',
+        verbose_name='رنگ اصلی'
+    )
+    secondary_color = models.CharField(
+        max_length=7, 
+        default='#6c757d',
+        verbose_name='رنگ ثانویه'
     )
     
-    # Domain Support (custom domain and subdomain hosting)
-    domain = models.CharField(
+    # Theme and layout
+    theme = models.CharField(
+        max_length=50, 
+        default='modern',
+        verbose_name='قالب',
+        help_text='نام قالب انتخاب شده'
+    )
+    layout = models.CharField(
+        max_length=50, 
+        default='grid',
+        verbose_name='چیدمان',
+        choices=[
+            ('grid', 'شبکه‌ای'),
+            ('list', 'لیستی'),
+            ('masonry', 'آجری'),
+            ('carousel', 'کاروسل'),
+        ]
+    )
+    custom_css = models.TextField(
+        blank=True,
+        verbose_name='CSS سفارشی',
+        help_text='استایل‌های CSS اضافی'
+    )
+    
+    # Domain configuration  
+    custom_domain = models.CharField(
         max_length=255, 
-        unique=True, 
         null=True, 
         blank=True,
         verbose_name='دامنه اختصاصی',
-        help_text='دامنه اختصاصی مثل: mystore.com'
+        help_text='دامنه شخصی فروشگاه (مثال: mystore.com)'
     )
-    subdomain = models.CharField(
-        max_length=50, 
-        unique=True,
-        verbose_name='زیردامنه',
-        help_text='زیردامنه مثل: mystore (برای mystore.mall.ir)',
-        validators=[RegexValidator(
-            regex='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,48}[a-zA-Z0-9])?$',
-            message='زیردامنه باید شامل حروف انگلیسی، اعداد و خط تیره باشد'
-        )]
+    is_subdomain_active = models.BooleanField(
+        default=True,
+        verbose_name='زیردامنه فعال',
+        help_text='آیا زیردامنه mall.ir فعال باشد؟'
     )
     
-    # Contact Information
-    phone = models.CharField(max_length=15, blank=True, verbose_name='شماره تلفن')
+    # Contact information
+    phone = models.CharField(max_length=15, blank=True, verbose_name='تلفن')
     email = models.EmailField(blank=True, verbose_name='ایمیل')
     address = models.TextField(blank=True, verbose_name='آدرس')
     city = models.CharField(max_length=100, blank=True, verbose_name='شهر')
     state = models.CharField(max_length=100, blank=True, verbose_name='استان')
     postal_code = models.CharField(max_length=10, blank=True, verbose_name='کد پستی')
     
-    # Social Media Integration (for content import)
-    instagram_username = models.CharField(
-        max_length=100, 
-        blank=True,
-        verbose_name='نام کاربری اینستاگرام',
-        help_text='برای واردات محتوا از اینستاگرام'
-    )
-    telegram_username = models.CharField(
-        max_length=100, 
-        blank=True,
-        verbose_name='نام کاربری تلگرام',
-        help_text='برای واردات محتوا از تلگرام'
-    )
-    telegram_channel_id = models.CharField(max_length=100, blank=True)
+    # Social media
+    instagram_url = models.URLField(blank=True, verbose_name='اینستاگرام')
+    telegram_url = models.URLField(blank=True, verbose_name='تلگرام')
+    whatsapp_number = models.CharField(max_length=15, blank=True, verbose_name='واتساپ')
     
-    # Business Settings
-    currency = models.CharField(max_length=10, default='تومان', verbose_name='واحد پول')
+    # Business settings
+    currency = models.CharField(
+        max_length=3, 
+        default='IRR',
+        verbose_name='واحد پول'
+    )
     tax_rate = models.DecimalField(
         max_digits=5, 
         decimal_places=2, 
-        default=0, 
-        verbose_name='نرخ مالیات'
+        default=0,
+        verbose_name='نرخ مالیات (%)'
     )
     
-    # Store Status
+    # SEO settings
+    meta_title = models.CharField(max_length=200, blank=True, verbose_name='عنوان متا')
+    meta_description = models.TextField(blank=True, verbose_name='توضیحات متا')
+    meta_keywords = models.TextField(blank=True, verbose_name='کلمات کلیدی')
+    
+    # Status and analytics
     is_active = models.BooleanField(default=True, verbose_name='فعال')
     is_verified = models.BooleanField(default=False, verbose_name='تأیید شده')
-    is_premium = models.BooleanField(default=False, verbose_name='پریمیوم')
+    is_featured = models.BooleanField(default=False, verbose_name='ویژه')
     
-    # Analytics and Metrics
-    total_orders = models.PositiveIntegerField(default=0, verbose_name='کل سفارشات')
-    total_revenue = models.DecimalField(
-        max_digits=15, 
+    # Analytics caching
+    total_products = models.PositiveIntegerField(default=0, verbose_name='تعداد کل محصولات')
+    total_orders = models.PositiveIntegerField(default=0, verbose_name='تعداد کل سفارشات')
+    total_customers = models.PositiveIntegerField(default=0, verbose_name='تعداد کل مشتریان')
+    monthly_revenue = models.DecimalField(
+        max_digits=12, 
         decimal_places=0, 
         default=0,
-        verbose_name='کل درآمد'
+        verbose_name='درآمد ماهانه'
     )
-    view_count = models.PositiveIntegerField(default=0, verbose_name='تعداد بازدید')
     
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='تاریخ ایجاد')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='آخرین به‌روزرسانی')
+    last_activity = models.DateTimeField(
+        auto_now=True,
+        verbose_name='آخرین فعالیت'
+    )
     
     class Meta:
-        ordering = ['-created_at']
         verbose_name = 'فروشگاه'
         verbose_name_plural = 'فروشگاه‌ها'
+        unique_together = ['owner', 'slug']
         indexes = [
-            models.Index(fields=['subdomain']),
-            models.Index(fields=['domain']),
-            models.Index(fields=['owner', '-created_at']),
+            models.Index(fields=['tenant']),
+            models.Index(fields=['owner']),
+            models.Index(fields=['is_active', 'is_verified']),
+            models.Index(fields=['store_type', 'is_active']),
+            models.Index(fields=['subscription_plan']),
+            models.Index(fields=['-created_at']),
         ]
     
     def __str__(self):
         return self.name_fa or self.name
     
-    @property
-    def full_domain(self):
-        """Get the full domain for the store"""
-        if self.domain:
-            return self.domain
-        return f'{self.subdomain}.mall.ir'
+    def save(self, *args, **kwargs):
+        # Auto-generate slug from name
+        if not self.slug:
+            self.slug = slugify(self.name_fa or self.name)
+        
+        # Ensure unique slug for owner
+        if not self.pk:
+            original_slug = self.slug
+            counter = 1
+            while Store.objects.filter(owner=self.owner, slug=self.slug).exists():
+                self.slug = f"{original_slug}-{counter}"
+                counter += 1
+        
+        super().save(*args, **kwargs)
+        
+        # Update tenant domain if needed
+        if self.tenant and not self.tenant.domain_url:
+            if self.custom_domain:
+                self.tenant.domain_url = self.custom_domain
+                self.tenant.is_custom_domain = True
+            else:
+                self.tenant.domain_url = f"{self.slug}.{settings.PLATFORM_DOMAIN}"
+                self.tenant.is_custom_domain = False
+            self.tenant.save()
     
     @property
-    def url(self):
-        """Get the full URL for the store"""
-        return f'https://{self.full_domain}'
+    def domain_url(self):
+        """Get the store's accessible domain URL"""
+        if self.custom_domain and self.tenant.is_custom_domain:
+            return self.custom_domain
+        elif self.is_subdomain_active:
+            platform_domain = getattr(settings, 'PLATFORM_DOMAIN', 'mall.ir')
+            return f"{self.slug}.{platform_domain}"
+        return None
     
-    def increment_view_count(self):
-        """Increment store view count"""
-        self.view_count += 1
-        self.save(update_fields=['view_count'])
+    @property
+    def store_url(self):
+        """Get the full store URL with protocol"""
+        domain = self.domain_url
+        if domain:
+            protocol = 'https' if not settings.DEBUG else 'http'
+            return f"{protocol}://{domain}"
+        return None
+    
+    def get_dashboard_url(self):
+        """Get admin dashboard URL for this store"""
+        return f"/admin/stores/{self.id}/"
+    
+    def can_add_product(self):
+        """Check if store can add more products"""
+        if self.tenant:
+            return self.total_products < self.tenant.max_products
+        return True
+    
+    def can_add_customer(self):
+        """Check if store can add more customers"""
+        if self.tenant:
+            return self.total_customers < self.tenant.max_customers
+        return True
+    
+    def update_analytics_cache(self):
+        """Update cached analytics data"""
+        self.total_products = self.products.filter(status='published').count()
+        self.total_customers = self.customers.count()
+        self.total_orders = self.orders.count()
+        
+        # Calculate monthly revenue
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        monthly_orders = self.orders.filter(
+            created_at__gte=thirty_days_ago,
+            status='completed'
+        )
+        self.monthly_revenue = sum(order.total_amount for order in monthly_orders)
+        
+        self.save(update_fields=[
+            'total_products', 
+            'total_customers', 
+            'total_orders', 
+            'monthly_revenue'
+        ])
+    
+    def get_subscription_limits(self):
+        """Get subscription plan limits"""
+        limits = {
+            'free': {'products': 50, 'storage_mb': 100},
+            'basic': {'products': 500, 'storage_mb': 1000},
+            'pro': {'products': 2000, 'storage_mb': 5000},
+            'enterprise': {'products': 10000, 'storage_mb': 20000},
+        }
+        return limits.get(self.subscription_plan, limits['free'])
+    
+    def is_subscription_active(self):
+        """Check if subscription is active"""
+        if self.subscription_plan == 'free':
+            return True
+        
+        if self.subscription_expires_at:
+            from django.utils import timezone
+            return timezone.now() < self.subscription_expires_at
+        
+        return False
 
-class StoreTheme(models.Model):
-    """
-    Store theme customization with real-time switching capability
-    """
-    LAYOUT_CHOICES = [
-        ('modern', 'مدرن'),
-        ('classic', 'کلاسیک'),
-        ('minimal', 'مینیمال'),
-        ('colorful', 'رنگارنگ'),
-        ('elegant', 'شیک'),
-        ('bold', 'پررنگ'),
+# Store staff management
+class StoreStaff(models.Model):
+    """Store staff members with role-based permissions"""
+    ROLES = [
+        ('admin', 'مدیر'),
+        ('manager', 'مدیر فروش'),
+        ('editor', 'ویرایشگر'),
+        ('viewer', 'بازدیدکننده'),
     ]
     
-    FONT_CHOICES = [
-        ('vazir', 'وزیر'),
-        ('iran-sans', 'ایران سنس'),
-        ('shabnam', 'شبنم'),
-        ('sahel', 'ساحل'),
-        ('tanha', 'تنها'),
-    ]
-    
-    store = models.OneToOneField(
-        Store, 
-        on_delete=models.CASCADE, 
-        related_name='theme',
-        verbose_name='فروشگاه'
-    )
-    name = models.CharField(max_length=100, verbose_name='نام تم')
-    
-    # Color customization
-    primary_color = models.CharField(
-        max_length=7, 
-        default='#3B82F6',
-        verbose_name='رنگ اصلی',
-        help_text='مثال: #FF0000'
-    )
-    secondary_color = models.CharField(
-        max_length=7, 
-        default='#64748B',
-        verbose_name='رنگ فرعی'
-    )
-    accent_color = models.CharField(
-        max_length=7, 
-        default='#F59E0B',
-        verbose_name='رنگ تأکید'
-    )
-    background_color = models.CharField(
-        max_length=7, 
-        default='#FFFFFF',
-        verbose_name='رنگ پس‌زمینه'
-    )
-    text_color = models.CharField(
-        max_length=7, 
-        default='#1F2937',
-        verbose_name='رنگ متن'
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='staff')
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE)
+    role = models.CharField(max_length=20, choices=ROLES, verbose_name='نقش')
+    permissions = models.JSONField(
+        default=dict,
+        verbose_name='مجوزها',
+        help_text='مجوزهای اضافی برای این کاربر'
     )
     
-    # Typography
-    font_family = models.CharField(
-        max_length=50, 
-        choices=FONT_CHOICES, 
-        default='vazir',
-        verbose_name='فونت'
-    )
-    font_size_base = models.PositiveIntegerField(default=16, verbose_name='اندازه فونت پایه')
-    
-    # Layout options
-    layout = models.CharField(
-        max_length=20, 
-        choices=LAYOUT_CHOICES, 
-        default='modern',
-        verbose_name='طرح‌بندی'
-    )
-    header_style = models.CharField(
-        max_length=20,
-        choices=[('fixed', 'ثابت'), ('sticky', 'چسبان'), ('static', 'استاتیک')],
-        default='sticky',
-        verbose_name='سبک هدر'
-    )
-    footer_style = models.CharField(
-        max_length=20,
-        choices=[('minimal', 'مینیمال'), ('detailed', 'تفصیلی'), ('simple', 'ساده')],
-        default='simple',
-        verbose_name='سبک فوتر'
-    )
-    
-    # Product display options
-    products_per_page = models.PositiveIntegerField(default=12, verbose_name='محصول در هر صفحه')
-    product_card_style = models.CharField(
-        max_length=20,
-        choices=[('card', 'کارت'), ('list', 'لیست'), ('grid', 'گرید')],
-        default='card',
-        verbose_name='سبک کارت محصول'
-    )
-    show_product_badges = models.BooleanField(default=True, verbose_name='نمایش برچسب محصولات')
-    
-    # Custom CSS
-    custom_css = models.TextField(
-        blank=True, 
-        verbose_name='CSS سفارشی',
-        help_text='کد CSS سفارشی برای شخصی‌سازی بیشتر'
-    )
-    
-    # Images
-    homepage_banner = models.ImageField(
-        upload_to='theme_banners/', 
-        null=True, 
-        blank=True,
-        verbose_name='بنر صفحه اصلی'
+    is_active = models.BooleanField(default=True, verbose_name='فعال')
+    invited_by = models.ForeignKey(
+        'accounts.User', 
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='invited_staff',
+        verbose_name='دعوت‌کننده'
     )
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        verbose_name = 'تم فروشگاه'
-        verbose_name_plural = 'تم‌های فروشگاه'
+        unique_together = ['store', 'user']
+        verbose_name = 'کارمند فروشگاه'
+        verbose_name_plural = 'کارمندان فروشگاه'
     
     def __str__(self):
-        return f'{self.name} - {self.store.name_fa}'
+        return f"{self.user.full_name} - {self.store.name} ({self.get_role_display()})"
 
-class StoreSettings(models.Model):
-    """
-    Store configuration and settings
-    """
-    store = models.OneToOneField(
-        Store, 
-        on_delete=models.CASCADE, 
-        related_name='settings',
-        verbose_name='فروشگاه'
-    )
-    
-    # SEO Settings
-    meta_title = models.CharField(max_length=200, blank=True, verbose_name='عنوان متا')
-    meta_description = models.TextField(blank=True, verbose_name='توضیحات متا')
-    meta_keywords = models.TextField(blank=True, verbose_name='کلمات کلیدی')
-    robots_txt = models.TextField(blank=True, verbose_name='محتوای robots.txt')
-    
-    # Analytics Integration
-    google_analytics_id = models.CharField(max_length=50, blank=True, verbose_name='Google Analytics ID')
-    google_tag_manager_id = models.CharField(max_length=50, blank=True, verbose_name='Google Tag Manager ID')
-    facebook_pixel_id = models.CharField(max_length=50, blank=True, verbose_name='Facebook Pixel ID')
-    
-    # Payment Gateway Integration (Iranian providers)
-    zarinpal_merchant_id = models.CharField(max_length=100, blank=True, verbose_name='ZarinPal Merchant ID')
-    parsian_pin = models.CharField(max_length=100, blank=True, verbose_name='Parsian PIN')
-    mellat_terminal_id = models.CharField(max_length=100, blank=True, verbose_name='Mellat Terminal ID')
-    
-    # SMS Integration
-    sms_provider = models.CharField(
-        max_length=20,
-        choices=[('kavenegar', 'کاوه نگار'), ('farapayamak', 'فراپیامک'), ('melipayamak', 'ملی پیامک')],
-        default='kavenegar',
-        verbose_name='ارائه‌دهنده SMS'
-    )
-    sms_api_key = models.CharField(max_length=200, blank=True, verbose_name='کلید API پیامک')
-    sms_sender_number = models.CharField(max_length=15, blank=True, verbose_name='شماره ارسال کننده')
-    
-    # SMS Templates
-    sms_welcome_template = models.TextField(
-        blank=True, 
-        verbose_name='قالب پیام خوش‌آمدگویی',
-        help_text='متغیرها: {name}, {store_name}'
-    )
-    sms_order_confirmation_template = models.TextField(
-        blank=True,
-        verbose_name='قالب تأیید سفارش',
-        help_text='متغیرها: {order_id}, {total}, {store_name}'
-    )
-    sms_shipping_template = models.TextField(
-        blank=True,
-        verbose_name='قالب ارسال سفارش',
-        help_text='متغیرها: {order_id}, {tracking_code}'
-    )
-    
-    # Logistics Integration (Iranian providers)
-    logistics_provider = models.CharField(
+# Store settings for different configurations
+class StoreSetting(models.Model):
+    """Flexible store settings storage"""
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='settings')
+    key = models.CharField(max_length=100, verbose_name='کلید')
+    value = models.TextField(verbose_name='مقدار')
+    value_type = models.CharField(
         max_length=20,
         choices=[
-            ('post', 'پست ایران'),
-            ('tipax', 'تیپاکس'),
-            ('chapar', 'چاپار'),
-            ('miare', 'میاره'),
+            ('string', 'متن'),
+            ('integer', 'عدد صحیح'),
+            ('float', 'عدد اعشاری'),
+            ('boolean', 'بولی'),
+            ('json', 'JSON'),
         ],
-        default='post',
-        verbose_name='ارائه‌دهنده حمل و نقل'
+        default='string',
+        verbose_name='نوع مقدار'
     )
-    logistics_api_key = models.CharField(max_length=200, blank=True, verbose_name='کلید API حمل و نقل')
-    
-    # Store Policies
-    return_policy = models.TextField(blank=True, verbose_name='سیاست برگشت کالا')
-    privacy_policy = models.TextField(blank=True, verbose_name='سیاست حریم خصوصی')
-    terms_of_service = models.TextField(blank=True, verbose_name='شرایط استفاده')
-    shipping_policy = models.TextField(blank=True, verbose_name='سیاست ارسال')
-    
-    # Business Hours
-    working_hours = models.JSONField(
-        default=dict,
-        verbose_name='ساعات کاری',
-        help_text='ساعات کاری هر روز هفته'
-    )
-    
-    # Feature Toggles
-    enable_chat = models.BooleanField(default=True, verbose_name='فعال‌سازی چت آنلاین')
-    enable_reviews = models.BooleanField(default=True, verbose_name='فعال‌سازی نظرات')
-    enable_wishlist = models.BooleanField(default=True, verbose_name='فعال‌سازی لیست علاقه‌مندی')
-    enable_compare = models.BooleanField(default=True, verbose_name='فعال‌سازی مقایسه محصولات')
-    enable_social_login = models.BooleanField(default=False, verbose_name='ورود با شبکه‌های اجتماعی')
-    
-    # Inventory Settings
-    low_stock_threshold = models.PositiveIntegerField(default=5, verbose_name='حد هشدار موجودی')
-    auto_reduce_stock = models.BooleanField(default=True, verbose_name='کاهش خودکار موجودی')
-    allow_backorders = models.BooleanField(default=False, verbose_name='اجازه پیش‌سفارش')
+    description = models.TextField(blank=True, verbose_name='توضیحات')
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        verbose_name = 'تنظیمات فروشگاه'
-        verbose_name_plural = 'تنظیمات فروشگاه‌ها'
+        unique_together = ['store', 'key']
+        verbose_name = 'تنظیم فروشگاه'
+        verbose_name_plural = 'تنظیمات فروشگاه'
     
-    def __str__(self):
-        return f'تنظیمات {self.store.name_fa}'
-
-class StoreAnalytics(models.Model):
-    """
-    Store analytics and metrics tracking
-    """
-    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='analytics')
-    date = models.DateField(verbose_name='تاریخ')
-    
-    # Traffic Metrics
-    visitors = models.PositiveIntegerField(default=0, verbose_name='بازدیدکنندگان')
-    page_views = models.PositiveIntegerField(default=0, verbose_name='بازدید صفحات')
-    unique_visitors = models.PositiveIntegerField(default=0, verbose_name='بازدیدکنندگان منحصر به فرد')
-    bounce_rate = models.DecimalField(
-        max_digits=5, 
-        decimal_places=2, 
-        default=0,
-        verbose_name='نرخ پرش'
-    )
-    
-    # Sales Metrics
-    orders_count = models.PositiveIntegerField(default=0, verbose_name='تعداد سفارشات')
-    revenue = models.DecimalField(
-        max_digits=15, 
-        decimal_places=0, 
-        default=0,
-        verbose_name='درآمد'
-    )
-    conversion_rate = models.DecimalField(
-        max_digits=5, 
-        decimal_places=2, 
-        default=0,
-        verbose_name='نرخ تبدیل'
-    )
-    average_order_value = models.DecimalField(
-        max_digits=12, 
-        decimal_places=0, 
-        default=0,
-        verbose_name='میانگین ارزش سفارش'
-    )
-    
-    # Product Metrics
-    products_viewed = models.PositiveIntegerField(default=0, verbose_name='محصولات مشاهده شده')
-    cart_additions = models.PositiveIntegerField(default=0, verbose_name='افزودن به سبد')
-    cart_abandonment_rate = models.DecimalField(
-        max_digits=5, 
-        decimal_places=2, 
-        default=0,
-        verbose_name='نرخ رها کردن سبد'
-    )
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        verbose_name = 'آمار فروشگاه'
-        verbose_name_plural = 'آمارهای فروشگاه'
-        unique_together = ['store', 'date']
-        ordering = ['-date']
-    
-    def __str__(self):
-        return f'{self.store.name_fa} - {self.date}'
+    def get_typed_value(self):
+        """Get value in appropriate type"""
+        if self.value_type == 'integer':
+            return int(self.value)
+        elif self.value_type == 'float':
+            return float(self.value)
+        elif self.value_type == 'boolean':
+            return self.value.lower() in ['true', '1', 'yes']
+        elif self.value_type == 'json':
+            import json
+            return json.loads(self.value)
+        else:
+            return self.value
