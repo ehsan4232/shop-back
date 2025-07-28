@@ -75,14 +75,20 @@ class Order(models.Model):
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
-    product_instance = models.ForeignKey('products.ProductInstance', on_delete=models.CASCADE)
+    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+    product_variant = models.ForeignKey(
+        'products.ProductVariant', 
+        on_delete=models.CASCADE,
+        null=True, 
+        blank=True
+    )
     quantity = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=12, decimal_places=0)
     total_price = models.DecimalField(max_digits=12, decimal_places=0)
     
     # Store product info at time of order (in case product changes later)
     product_name = models.CharField(max_length=200)
-    product_sku = models.CharField(max_length=100)
+    product_sku = models.CharField(max_length=100, blank=True)
     product_attributes = models.JSONField(default=dict)  # Store attributes as JSON
     
     class Meta:
@@ -95,6 +101,13 @@ class OrderItem(models.Model):
     def save(self, *args, **kwargs):
         if not self.total_price:
             self.total_price = self.unit_price * self.quantity
+        
+        # Store product information at order time
+        if not self.product_name:
+            self.product_name = self.product.name_fa
+        if not self.product_sku:
+            self.product_sku = self.product.sku or ''
+        
         super().save(*args, **kwargs)
 
 class Cart(models.Model):
@@ -109,7 +122,7 @@ class Cart(models.Model):
         verbose_name_plural = 'سبدهای خرید'
     
     def __str__(self):
-        return f'سبد {self.customer.phone_number} - {self.store.name_fa}'
+        return f'سبد {self.customer.phone} - {self.store.name_fa}'  # Fixed: phone_number -> phone
     
     @property
     def total_amount(self):
@@ -121,18 +134,31 @@ class Cart(models.Model):
 
 class CartItem(models.Model):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='items')
-    product_instance = models.ForeignKey('products.ProductInstance', on_delete=models.CASCADE)
+    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+    product_variant = models.ForeignKey(
+        'products.ProductVariant',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True
+    )
     quantity = models.PositiveIntegerField(default=1)
     added_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
-        unique_together = ['cart', 'product_instance']
+        unique_together = ['cart', 'product', 'product_variant']
         verbose_name = 'آیتم سبد'
         verbose_name_plural = 'آیتم‌های سبد'
     
     def __str__(self):
-        return f'{self.product_instance.product.name_fa} x {self.quantity}'
+        variant_info = f" - {self.product_variant.get_attribute_summary()}" if self.product_variant else ""
+        return f'{self.product.name_fa}{variant_info} x {self.quantity}'
+    
+    @property
+    def unit_price(self):
+        if self.product_variant:
+            return self.product_variant.price
+        return self.product.base_price
     
     @property
     def total_price(self):
-        return self.product_instance.final_price * self.quantity
+        return self.unit_price * self.quantity
