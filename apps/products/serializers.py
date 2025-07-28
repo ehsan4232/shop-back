@@ -234,17 +234,6 @@ class CollectionDetailSerializer(CollectionSerializer):
     class Meta(CollectionSerializer.Meta):
         fields = CollectionSerializer.Meta.fields + ['products']
 
-# Social Media Integration Serializers
-class SocialMediaImportSerializer(serializers.ModelSerializer):
-    
-    class Meta:
-        model = SocialMediaImport
-        fields = [
-            'id', 'source', 'channel_username', 'post_id', 'post_url',
-            'imported_content', 'created_at'
-        ]
-        read_only_fields = ['id', 'created_at']
-
 # Utility Serializers for Filtering
 class FilterChoiceSerializer(serializers.Serializer):
     value = serializers.CharField()
