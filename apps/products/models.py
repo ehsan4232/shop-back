@@ -4,8 +4,8 @@ import uuid
 
 class ProductClass(MPTTModel):
     """
-    Product Class with unlimited tree structure as per product description.
-    Represents categories and subcategories that can be marked as categorizers.
+    Product Class with unlimited tree structure implementing proper OOP inheritance.
+    Child classes inherit all attributes from their parent classes.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='product_classes')
@@ -20,10 +20,6 @@ class ProductClass(MPTTModel):
         blank=True, 
         related_name='children',
         verbose_name='والد'
-    )
-    is_categorizer = models.BooleanField(
-        default=False, 
-        help_text='آیا این کلاس برای دسته‌بندی استفاده شود؟ (Level 1 children)'
     )
     image = models.ImageField(upload_to='product_classes/', null=True, blank=True)
     is_active = models.BooleanField(default=True)
@@ -46,16 +42,38 @@ class ProductClass(MPTTModel):
         """Only leaf nodes can have product instances"""
         return not self.children.exists()
     
-    def get_attributes(self):
-        """Get all attributes for this class including inherited ones"""
-        attrs = list(self.attributes.all())
-        if self.parent:
-            attrs.extend(self.parent.get_attributes())
-        return attrs
+    def get_all_attributes(self):
+        """
+        Get all attributes for this class including inherited ones from parent hierarchy.
+        Implements object-oriented inheritance principle.
+        """
+        # Get direct attributes
+        attributes = list(self.attributes.all().order_by('order', 'name_fa'))
+        
+        # Get inherited attributes from all ancestors
+        for ancestor in self.get_ancestors():
+            inherited_attrs = list(ancestor.attributes.all().order_by('order', 'name_fa'))
+            # Add inherited attributes that don't already exist
+            for attr in inherited_attrs:
+                if not any(existing.name == attr.name for existing in attributes):
+                    attributes.append(attr)
+        
+        return attributes
+    
+    def get_inherited_attributes(self):
+        """Get only inherited attributes from parent classes"""
+        inherited = []
+        for ancestor in self.get_ancestors():
+            inherited.extend(ancestor.attributes.all())
+        return inherited
+    
+    def get_direct_attributes(self):
+        """Get only direct attributes (not inherited)"""
+        return self.attributes.all()
 
 class ProductAttribute(models.Model):
     """
-    Product attributes as described: Color, Description, and Custom types
+    Product attributes that are inherited by child classes following OOP principles
     """
     ATTRIBUTE_TYPES = [
         ('color', 'رنگ'),
@@ -87,6 +105,20 @@ class ProductAttribute(models.Model):
     )
     order = models.PositiveIntegerField(default=0)
     
+    # Inheritance tracking
+    is_inherited = models.BooleanField(
+        default=False, 
+        help_text='آیا این ویژگی از کلاس والد به ارث رسیده؟'
+    )
+    inherited_from = models.ForeignKey(
+        ProductClass, 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True,
+        related_name='inherited_attributes',
+        help_text='کلاس والدی که این ویژگی از آن به ارث رسیده'
+    )
+    
     class Meta:
         ordering = ['order', 'name_fa']
         verbose_name = 'ویژگی محصول'
@@ -94,11 +126,12 @@ class ProductAttribute(models.Model):
         unique_together = ['product_class', 'name']
     
     def __str__(self):
-        return f'{self.product_class.name_fa} - {self.name_fa}'
+        inheritance_info = f" (وراثت از {self.inherited_from.name_fa})" if self.is_inherited else ""
+        return f'{self.product_class.name_fa} - {self.name_fa}{inheritance_info}'
 
 class Product(models.Model):
     """
-    Product with price attribute and media lists as per description
+    Product with price attribute and media lists, inheriting all attributes from its class hierarchy
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     product_class = models.ForeignKey(
@@ -157,6 +190,21 @@ class Product(models.Model):
     def store(self):
         return self.product_class.store
     
+    def get_all_attributes(self):
+        """
+        Get all available attributes for this product including inherited ones.
+        Implements OOP inheritance from the product class hierarchy.
+        """
+        return self.product_class.get_all_attributes()
+    
+    def get_required_attributes(self):
+        """Get all required attributes for this product"""
+        return [attr for attr in self.get_all_attributes() if attr.is_required]
+    
+    def get_optional_attributes(self):
+        """Get all optional attributes for this product"""
+        return [attr for attr in self.get_all_attributes() if not attr.is_required]
+    
     def increment_view_count(self):
         self.view_count += 1
         self.save(update_fields=['view_count'])
@@ -167,7 +215,7 @@ class Product(models.Model):
 
 class ProductInstance(models.Model):
     """
-    Product instances created from leaf products only, with varying attributes
+    Product instances created from leaf products only, inheriting all attributes from the class hierarchy
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='instances')
@@ -206,10 +254,38 @@ class ProductInstance(models.Model):
     @property
     def is_out_of_stock(self):
         return self.stock_quantity <= 0
+    
+    def get_all_attributes(self):
+        """Get all available attributes for this instance (inherited from product class hierarchy)"""
+        return self.product.get_all_attributes()
+    
+    def get_attribute_values(self):
+        """Get all attribute values for this instance"""
+        return self.attribute_values.all().select_related('attribute')
+    
+    def get_attribute_value(self, attribute_name):
+        """Get specific attribute value by name"""
+        try:
+            return self.attribute_values.get(attribute__name=attribute_name).value
+        except ProductInstanceAttribute.DoesNotExist:
+            return None
+    
+    def set_attribute_value(self, attribute, value, color_hex=None):
+        """Set attribute value for this instance"""
+        attr_value, created = self.attribute_values.get_or_create(
+            attribute=attribute,
+            defaults={'value': value, 'color_hex': color_hex}
+        )
+        if not created:
+            attr_value.value = value
+            if color_hex:
+                attr_value.color_hex = color_hex
+            attr_value.save()
+        return attr_value
 
 class ProductInstanceAttribute(models.Model):
     """
-    Attribute values for product instances with multiple instances having varying attributes
+    Attribute values for product instances with inherited attributes from class hierarchy
     """
     instance = models.ForeignKey(
         ProductInstance, 
@@ -233,7 +309,16 @@ class ProductInstanceAttribute(models.Model):
         verbose_name_plural = 'مقادیر ویژگی‌های نمونه'
     
     def __str__(self):
-        return f'{self.instance} - {self.attribute.name_fa}: {self.value}'
+        inheritance_note = " (وراثتی)" if self.attribute.is_inherited else ""
+        return f'{self.instance} - {self.attribute.name_fa}: {self.value}{inheritance_note}'
+    
+    def clean(self):
+        """Validate that attribute is available for this product instance"""
+        available_attrs = self.instance.get_all_attributes()
+        if self.attribute not in available_attrs:
+            raise ValidationError(
+                f'ویژگی {self.attribute.name_fa} برای این نمونه محصول در دسترس نیست'
+            )
 
 class ProductMedia(models.Model):
     """
@@ -292,3 +377,34 @@ class SocialMediaImport(models.Model):
     
     def __str__(self):
         return f'{self.get_source_display()} - {self.channel_username} - {self.post_id}'
+
+# Signal to auto-create inherited attributes for child classes
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=ProductClass)
+def create_inherited_attributes(sender, instance, created, **kwargs):
+    """
+    Automatically create inherited attributes when a new ProductClass is created.
+    This ensures proper OOP inheritance implementation.
+    """
+    if created and instance.parent:
+        # Get all attributes from parent hierarchy
+        parent_attributes = instance.parent.get_all_attributes()
+        
+        for parent_attr in parent_attributes:
+            # Create inherited attribute for this class
+            ProductAttribute.objects.get_or_create(
+                product_class=instance,
+                name=parent_attr.name,
+                defaults={
+                    'name_fa': parent_attr.name_fa,
+                    'attribute_type': parent_attr.attribute_type,
+                    'is_required': parent_attr.is_required,
+                    'is_price_attribute': parent_attr.is_price_attribute,
+                    'choices': parent_attr.choices,
+                    'order': parent_attr.order,
+                    'is_inherited': True,
+                    'inherited_from': parent_attr.product_class,
+                }
+            )
