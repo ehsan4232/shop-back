@@ -1,41 +1,30 @@
 from django.contrib import admin
-from .models import SocialMediaAccount, SocialMediaPost, SocialMediaFile, SocialMediaImportSession
+from .models import *
 
 @admin.register(SocialMediaAccount)
 class SocialMediaAccountAdmin(admin.ModelAdmin):
-    list_display = ['store', 'platform', 'username', 'is_active', 'last_sync', 'created_at']
-    list_filter = ['platform', 'is_active', 'created_at']
+    list_display = ['store', 'platform', 'username', 'is_active', 'auto_import', 'last_sync']
+    list_filter = ['platform', 'is_active', 'auto_import']
     search_fields = ['username', 'store__name_fa']
     readonly_fields = ['last_sync', 'created_at', 'updated_at']
-    
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        if request.user.is_superuser:
-            return qs
-        # Only show accounts for stores owned by current user
-        return qs.filter(store__owner=request.user)
 
 @admin.register(SocialMediaPost)
 class SocialMediaPostAdmin(admin.ModelAdmin):
-    list_display = ['account', 'post_id', 'caption_preview', 'post_date', 'is_imported', 'likes_count']
-    list_filter = ['account__platform', 'is_imported', 'post_date']
-    search_fields = ['post_id', 'caption', 'account__username']
-    readonly_fields = ['post_date', 'created_at', 'import_date']
-    
-    def caption_preview(self, obj):
-        if obj.caption:
-            return obj.caption[:50] + '...' if len(obj.caption) > 50 else obj.caption
-        return '-'
-    caption_preview.short_description = 'Caption Preview'
+    list_display = ['account', 'post_id', 'post_type', 'is_imported', 'posted_at', 'engagement_rate']
+    list_filter = ['post_type', 'is_imported', 'account__platform']
+    search_fields = ['post_id', 'caption']
+    readonly_fields = ['engagement_rate', 'created_at', 'updated_at']
+    date_hierarchy = 'posted_at'
 
-@admin.register(SocialMediaFile)
-class SocialMediaFileAdmin(admin.ModelAdmin):
-    list_display = ['post', 'file_type', 'is_selected', 'downloaded_at', 'file_size']
-    list_filter = ['file_type', 'is_selected', 'downloaded_at']
-    readonly_fields = ['downloaded_at', 'created_at']
+@admin.register(ImportSession)
+class ImportSessionAdmin(admin.ModelAdmin):
+    list_display = ['account', 'status', 'posts_found', 'posts_imported', 'products_created', 'success_rate', 'created_at']
+    list_filter = ['status', 'account__platform']
+    readonly_fields = ['success_rate', 'duration', 'created_at', 'started_at', 'completed_at']
+    date_hierarchy = 'created_at'
 
-@admin.register(SocialMediaImportSession)
-class SocialMediaImportSessionAdmin(admin.ModelAdmin):
-    list_display = ['account', 'status', 'posts_found', 'posts_imported', 'started_at', 'completed_at']
-    list_filter = ['status', 'started_at']
-    readonly_fields = ['started_at', 'completed_at']
+@admin.register(MediaDownload)
+class MediaDownloadAdmin(admin.ModelAdmin):
+    list_display = ['post', 'media_type', 'status', 'file_size_mb', 'downloaded_at']
+    list_filter = ['media_type', 'status']
+    readonly_fields = ['file_size_mb', 'downloaded_at']
