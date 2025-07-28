@@ -1,19 +1,16 @@
 from django.urls import path
+from rest_framework.routers import DefaultRouter
 from . import views
 
+app_name = 'payments'
+
+router = DefaultRouter()
+
 urlpatterns = [
-    # Payment Gateways
-    path('gateways/', views.PaymentGatewayListView.as_view(), name='payment-gateways-list'),
-    path('gateways/<uuid:pk>/', views.PaymentGatewayDetailView.as_view(), name='payment-gateway-detail'),
-    
-    # Payments
-    path('', views.PaymentListView.as_view(), name='payments-list'),
-    path('<uuid:pk>/', views.PaymentDetailView.as_view(), name='payment-detail'),
-    
-    # Payment Processing
-    path('request/', views.create_payment_request, name='payment-request'),
-    path('verify/', views.verify_payment, name='payment-verify'),
-    
-    # Refunds
-    path('refunds/', views.RefundListCreateView.as_view(), name='refunds-list'),
-]
+    path('gateways/', views.PaymentGatewayListView.as_view(), name='gateway-list'),
+    path('gateways/<uuid:pk>/', views.PaymentGatewayDetailView.as_view(), name='gateway-detail'),
+    path('process/', views.ProcessPaymentView.as_view(), name='process-payment'),
+    path('verify/', views.VerifyPaymentView.as_view(), name='verify-payment'),
+    path('webhook/', views.PaymentWebhookView.as_view(), name='webhook'),
+    path('refund/', views.RefundPaymentView.as_view(), name='refund-payment'),
+] + router.urls
