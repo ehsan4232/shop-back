@@ -20,8 +20,8 @@ class Order(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE)
-    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='orders')
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='orders')
     order_number = models.CharField(max_length=20, unique=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending')
@@ -62,6 +62,12 @@ class Order(models.Model):
         ordering = ['-created_at']
         verbose_name = 'سفارش'
         verbose_name_plural = 'سفارشات'
+        indexes = [
+            models.Index(fields=['store', '-created_at']),
+            models.Index(fields=['customer', '-created_at']),
+            models.Index(fields=['status']),
+            models.Index(fields=['order_number']),
+        ]
     
     def __str__(self):
         return f'سفارش {self.order_number}'
@@ -111,8 +117,8 @@ class OrderItem(models.Model):
         super().save(*args, **kwargs)
 
 class Cart(models.Model):
-    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE)
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='carts')
+    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='carts')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -122,7 +128,7 @@ class Cart(models.Model):
         verbose_name_plural = 'سبدهای خرید'
     
     def __str__(self):
-        return f'سبد {self.customer.phone} - {self.store.name_fa}'  # Fixed: phone_number -> phone
+        return f'سبد {self.customer.phone} - {self.store.name_fa}'
     
     @property
     def total_amount(self):
@@ -162,3 +168,18 @@ class CartItem(models.Model):
     @property
     def total_price(self):
         return self.unit_price * self.quantity
+
+class Wishlist(models.Model):
+    """Customer wishlist"""
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='wishlists')
+    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='wishlists')
+    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+    added_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['customer', 'store', 'product']
+        verbose_name = 'لیست علاقه‌مندی'
+        verbose_name_plural = 'لیست‌های علاقه‌مندی'
+    
+    def __str__(self):
+        return f'{self.customer.phone} - {self.product.name_fa}'
