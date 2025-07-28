@@ -9,6 +9,7 @@ api_patterns = [
     path('stores/', include('apps.stores.urls')),
     path('products/', include('apps.products.urls')),
     path('orders/', include('apps.orders.urls')),
+    path('social/', include('apps.social_media.urls')),  # Added missing social media URLs
 ]
 
 urlpatterns = [
