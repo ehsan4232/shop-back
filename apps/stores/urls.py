@@ -1,23 +1,35 @@
-from django.urls import path
+"""
+Store URLs configuration
+"""
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from . import views
 
+# Create router for ViewSets
+router = DefaultRouter()
+router.register(r'', views.StoreViewSet, basename='store')
+
 urlpatterns = [
-    # Store CRUD
-    path('', views.StoreListCreateView.as_view(), name='store-list-create'),
-    path('<uuid:pk>/', views.StoreDetailView.as_view(), name='store-detail'),
+    # Store ViewSet routes (list, retrieve, create, update, delete)
+    path('', include(router.urls)),
     
-    # Store Theme & Settings
-    path('<uuid:store_pk>/theme/', views.StoreThemeView.as_view(), name='store-theme'),
-    path('<uuid:store_pk>/settings/', views.StoreSettingsView.as_view(), name='store-settings'),
+    # Custom store endpoints
+    path('current/', views.CurrentStoreView.as_view(), name='current-store'),
+    path('statistics/', views.StoreStatisticsView.as_view(), name='store-statistics'),
+    path('analytics/', views.StoreAnalyticsView.as_view(), name='store-analytics'),
     
-    # Analytics & Statistics
-    path('<uuid:store_pk>/statistics/', views.store_statistics, name='store-statistics'),
-    path('<uuid:store_pk>/analytics/', views.store_analytics_data, name='store-analytics'),
+    # Theme management
+    path('theme/', views.StoreThemeView.as_view(), name='store-theme'),
+    path('theme/preview/', views.ThemePreviewView.as_view(), name='theme-preview'),
     
-    # Public Store Access
-    path('public/<str:subdomain>/', views.store_public_info, name='store-public'),
+    # Settings management
+    path('settings/', views.StoreSettingsView.as_view(), name='store-settings'),
     
-    # Utilities
-    path('check-subdomain/', views.check_subdomain_availability, name='check-subdomain'),
-    path('check-domain/', views.check_domain_availability, name='check-domain'),
+    # Domain management
+    path('domain/check/', views.DomainCheckView.as_view(), name='domain-check'),
+    path('domain/setup/', views.DomainSetupView.as_view(), name='domain-setup'),
+    
+    # Store validation
+    path('validate/subdomain/', views.SubdomainValidationView.as_view(), name='validate-subdomain'),
+    path('validate/domain/', views.DomainValidationView.as_view(), name='validate-domain'),
 ]
