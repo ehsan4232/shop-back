@@ -387,6 +387,21 @@ def store_statistics(request):
     
     return Response(stats)
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def trending_searches(request):
+    """Get trending search terms"""
+    # This could be implemented with a search analytics model
+    # For now, return some mock data
+    trending = [
+        {'term': 'گوشی هوشمند', 'count': 150},
+        {'term': 'لپ‌تاپ', 'count': 120},
+        {'term': 'هدفون', 'count': 90},
+        {'term': 'ساعت هوشمند', 'count': 75},
+        {'term': 'تبلت', 'count': 60},
+    ]
+    return Response({'trending': trending})
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generate_product_variants(request):
