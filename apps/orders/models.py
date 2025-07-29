@@ -172,6 +172,98 @@ class CartItem(models.Model):
         else:
             return self.product.stock_quantity >= self.quantity
 
+class Wishlist(models.Model):
+    """Customer wishlists"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    customer = models.ForeignKey('accounts.User', on_delete=models.CASCADE, related_name='wishlist_items')
+    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE)
+    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+    
+    # Optional variant for specific product variations
+    variant = models.ForeignKey('products.ProductVariant', on_delete=models.CASCADE, null=True, blank=True)
+    
+    # Additional metadata
+    notes = models.TextField(blank=True, verbose_name='یادداشت')
+    priority = models.PositiveIntegerField(
+        default=1,
+        choices=[
+            (1, 'کم'),
+            (2, 'متوسط'),
+            (3, 'زیاد'),
+        ],
+        verbose_name='اولویت'
+    )
+    
+    # Price tracking
+    price_when_added = models.DecimalField(max_digits=12, decimal_places=0, verbose_name='قیمت هنگام افزودن')
+    notify_on_discount = models.BooleanField(default=True, verbose_name='اطلاع‌رسانی تخفیف')
+    notify_on_availability = models.BooleanField(default=True, verbose_name='اطلاع‌رسانی موجودی')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['customer', 'product', 'variant']
+        verbose_name = 'لیست علاقه‌مندی'
+        verbose_name_plural = 'لیست‌های علاقه‌مندی'
+        indexes = [
+            models.Index(fields=['customer', '-created_at']),
+            models.Index(fields=['store', '-created_at']),
+            models.Index(fields=['product']),
+        ]
+    
+    def __str__(self):
+        variant_info = f" - {self.variant.get_attribute_summary()}" if self.variant else ""
+        return f"{self.customer.full_name} - {self.product.name_fa}{variant_info}"
+    
+    def save(self, *args, **kwargs):
+        # Set price when first added
+        if not self.price_when_added:
+            self.price_when_added = self.variant.price if self.variant else self.product.base_price
+        super().save(*args, **kwargs)
+    
+    @property
+    def current_price(self):
+        """Get current price of the item"""
+        return self.variant.price if self.variant else self.product.base_price
+    
+    @property
+    def price_difference(self):
+        """Calculate price difference since added"""
+        return self.current_price - self.price_when_added
+    
+    @property
+    def has_discount(self):
+        """Check if item is currently discounted"""
+        return self.price_difference < 0
+    
+    @property
+    def is_available(self):
+        """Check if item is currently in stock"""
+        if self.variant:
+            return self.variant.stock_quantity > 0
+        return self.product.stock_quantity > 0
+    
+    def move_to_cart(self, quantity=1):
+        """Move item from wishlist to cart"""
+        if not self.is_available:
+            return False, "محصول موجود نیست"
+        
+        # Get or create cart
+        cart, created = Cart.objects.get_or_create(
+            customer=self.customer,
+            store=self.store
+        )
+        
+        # Add to cart
+        cart_item = cart.add_item(
+            product=self.product,
+            variant=self.variant,
+            quantity=quantity
+        )
+        
+        return True, cart_item
+
 class Order(models.Model):
     """Customer orders"""
     STATUS_CHOICES = [
@@ -463,3 +555,15 @@ def update_store_analytics(sender, instance, created, **kwargs):
         # Update product sales count
         for item in instance.items.all():
             item.product.increment_sales_count(item.quantity)
+
+@receiver(post_save, sender=CartItem)
+def update_cart_totals(sender, instance, **kwargs):
+    """Update cart totals when items change"""
+    instance.cart.recalculate_totals()
+
+@receiver(pre_delete, sender=CartItem)
+def update_cart_totals_on_delete(sender, instance, **kwargs):
+    """Update cart totals when items are deleted"""
+    # Schedule recalculation after deletion
+    from django.db import transaction
+    transaction.on_commit(lambda: instance.cart.recalculate_totals())
