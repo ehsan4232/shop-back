@@ -22,6 +22,7 @@ class AttributeType(TimestampMixin, SlugMixin):
         ('choice', 'انتخاب'),
         ('boolean', 'بولی'),
         ('date', 'تاریخ'),
+        ('custom', 'سفارشی'),  # ADDED: For user-defined attributes per product description
     ]
     
     # FIX: Add UUID primary key for consistency
@@ -32,7 +33,11 @@ class AttributeType(TimestampMixin, SlugMixin):
     data_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='text', verbose_name='نوع داده')
     is_required = models.BooleanField(default=False, verbose_name='اجباری')
     is_filterable = models.BooleanField(default=True, verbose_name='قابل فیلتر')
+    is_categorizer = models.BooleanField(default=False, verbose_name='دسته‌بند')  # ADDED: For creating subclasses
     display_order = models.PositiveIntegerField(default=0, verbose_name='ترتیب نمایش')
+    
+    # ADDED: Support for custom validation rules
+    validation_rules = models.JSONField(default=dict, blank=True, verbose_name='قوانین اعتبارسنجی')
     
     class Meta:
         verbose_name = 'نوع ویژگی'
@@ -43,6 +48,7 @@ class AttributeType(TimestampMixin, SlugMixin):
             models.Index(fields=['data_type']),
             models.Index(fields=['is_required']),
             models.Index(fields=['is_filterable']),
+            models.Index(fields=['is_categorizer']),  # ADDED
             models.Index(fields=['display_order']),
             models.Index(fields=['name']),
             models.Index(fields=['name_fa']),
@@ -98,7 +104,7 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
     """
     Object-oriented product class hierarchy with inheritance
     Implements the core OOP requirement with unlimited depth
-    FIXED: Enhanced MPTT performance and price inheritance logic
+    CRITICAL FIX: Added proper validation for leaf-only product creation
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
@@ -125,6 +131,10 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
         blank=True,
         verbose_name='قیمت پایه (وراثتی)'
     )
+    
+    # CRITICAL FIX: Add media_list per product description requirement
+    # "Root Class: Product (with price attribute and media (image/video) list)"
+    media_list = models.JSONField(default=list, blank=True, verbose_name='لیست رسانه (تصاویر/ویدیوها)')
     
     # Display properties
     icon = models.CharField(max_length=50, blank=True, verbose_name='آیکون')
@@ -158,6 +168,44 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
     def __str__(self):
         return self.name_fa or self.name
     
+    # CRITICAL FIX: Add proper validation for business rules
+    def clean(self):
+        """Enhanced validation for product description requirements"""
+        super().clean()
+        
+        # CRITICAL: Validate circular references
+        if self.parent and self.pk:
+            if self.parent == self:
+                raise ValidationError({'parent': 'کلاس نمی‌تواند والد خودش باشد'})
+            
+            # Check for circular dependency
+            ancestors = self.parent.get_ancestors(include_self=True)
+            if ancestors.filter(pk=self.pk).exists():
+                raise ValidationError({
+                    'parent': 'انتخاب این والد باعث ایجاد حلقه در ساختار درختی می‌شود'
+                })
+        
+        # CRITICAL: Product description requirement - "Instance Creation: Only from leaf nodes"
+        if self.pk and not self.is_leaf:
+            existing_products = self.products.exists()
+            if existing_products:
+                raise ValidationError({
+                    'is_leaf': 'کلاس‌های غیربرگ نمی‌توانند محصول داشته باشند. طبق قوانین کسب‌وکار، فقط کلاس‌های برگ مجاز به ایجاد محصول هستند.'
+                })
+    
+    def can_create_product_instances(self):
+        """
+        CRITICAL FIX: Validate if this class can create product instances
+        Product description: "Instance Creation: Only from leaf nodes"
+        """
+        if not self.is_active:
+            return False, 'کلاس محصول غیرفعال است'
+        
+        if not self.is_leaf:
+            return False, 'فقط کلاس‌های برگ می‌توانند محصول ایجاد کنند (طبق قوانین کسب‌وکار)'
+        
+        return True, 'امکان ایجاد محصول وجود دارد'
+    
     # FIX: Improved price inheritance without circular dependencies
     def get_effective_price(self):
         """Get effective price with optimized inheritance chain"""
@@ -177,12 +225,30 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
         cache.set(cache_key, price, timeout=300)  # 5 minutes cache
         return price
     
+    # ADDED: Media inheritance per product description
+    def get_inherited_media(self):
+        """
+        Get inherited media list from ancestors
+        Product description: "Root Class: Product (with price attribute and media list)"
+        """
+        all_media = []
+        ancestors = self.get_ancestors(include_self=True).order_by('level')
+        
+        for ancestor in ancestors:
+            if ancestor.media_list:
+                all_media.extend(ancestor.media_list)
+        
+        return all_media
+    
     @validate_on_save
     def save(self, *args, **kwargs):
         # Auto-generate is_leaf based on children
         if self.pk:
             has_children = self.get_children().exists()
             self.is_leaf = not has_children
+        
+        # Call validation
+        self.full_clean()
         
         super().save(*args, **kwargs)
         
@@ -224,7 +290,7 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
 class ProductClassAttribute(TimestampMixin):
     """
     Attributes defined at class level that are inherited by child classes
-    FIXED: Added UUID and performance indexes
+    ENHANCED: Added categorizer support for subclass creation
     """
     # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -234,7 +300,11 @@ class ProductClassAttribute(TimestampMixin):
     default_value = models.TextField(blank=True, verbose_name='مقدار پیش‌فرض')
     is_required = models.BooleanField(default=False, verbose_name='اجباری')
     is_inherited = models.BooleanField(default=True, verbose_name='وراثتی')
+    is_categorizer = models.BooleanField(default=False, verbose_name='دسته‌بند')  # ADDED: For subclass creation
     display_order = models.PositiveIntegerField(default=0, verbose_name='ترتیب نمایش')
+    
+    # ADDED: Validation rules for complex attributes
+    validation_rules = models.JSONField(default=dict, blank=True, verbose_name='قوانین اعتبارسنجی')
     
     class Meta:
         unique_together = ['product_class', 'attribute_type']
@@ -246,6 +316,7 @@ class ProductClassAttribute(TimestampMixin):
             models.Index(fields=['product_class', 'attribute_type']),
             models.Index(fields=['is_required']),
             models.Index(fields=['is_inherited']),
+            models.Index(fields=['is_categorizer']),  # ADDED
             models.Index(fields=['display_order']),
         ]
     
@@ -381,7 +452,7 @@ class ProductAttribute(TimestampMixin):
 class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin, SEOMixin, ViewCountMixin, AnalyticsMixin):
     """
     Enhanced product model with object-oriented class support and comprehensive features
-    FIXED: Optimized price inheritance and query performance
+    CRITICAL FIX: Added stock warning validation for customers per product description
     """
     STATUS_CHOICES = [
         ('draft', 'پیش‌نویس'),
@@ -456,7 +527,7 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
     rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0, verbose_name='میانگین امتیاز')
     rating_count = models.PositiveIntegerField(default=0, verbose_name='تعداد امتیاز')
     
-    # Social media integration
+    # ENHANCED: Social media integration per product description requirements
     imported_from_social = models.BooleanField(default=False, verbose_name='وارد شده از شبکه اجتماعی')
     social_media_source = models.CharField(
         max_length=20, 
@@ -466,6 +537,10 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
         verbose_name='منبع شبکه اجتماعی'
     )
     social_media_post_id = models.CharField(max_length=100, null=True, blank=True, verbose_name='شناسه پست')
+    
+    # ADDED: Enhanced social media data storage for "Last 5 posts extraction"
+    social_media_data = models.JSONField(default=dict, blank=True, verbose_name='داده‌های شبکه اجتماعی')
+    last_social_import = models.DateTimeField(null=True, blank=True, verbose_name='آخرین وارد کردن از شبکه اجتماعی')
     
     # Timestamps (from TimestampMixin, but need to override for published_at)
     published_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ انتشار')
@@ -489,10 +564,31 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
             models.Index(fields=['-rating_average']),
             models.Index(fields=['stock_quantity']),  # For inventory queries
             models.Index(fields=['published_at']),    # For date filtering
+            models.Index(fields=['social_media_source']),  # ADDED for social media queries
+            models.Index(fields=['imported_from_social']),  # ADDED
         ]
     
     def __str__(self):
         return self.name_fa or self.name
+    
+    # CRITICAL FIX: Add validation for leaf-only product creation
+    def clean(self):
+        """Enhanced validation for product description requirements"""
+        super().clean()
+        
+        # CRITICAL: Product description requirement - "Instance Creation: Only from leaf nodes"
+        if self.product_class and not self.product_class.is_leaf:
+            raise ValidationError({
+                'product_class': 'فقط از کلاس‌های برگ می‌توان محصول ایجاد کرد. کلاس انتخاب شده کلاس برگ نیست.'
+            })
+        
+        # Validate product class can create instances
+        if self.product_class:
+            can_create, message = self.product_class.can_create_product_instances()
+            if not can_create:
+                raise ValidationError({
+                    'product_class': f'امکان ایجاد محصول از این کلاس وجود ندارد: {message}'
+                })
     
     # FIX: Optimized price inheritance with caching
     def get_effective_price(self):
@@ -502,6 +598,28 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
         
         # Use product class price inheritance
         return self.product_class.get_effective_price()
+    
+    # CRITICAL FIX: Add stock warning for customers per product description
+    def needs_stock_warning(self):
+        """
+        Check if stock warning should be shown to customers
+        Product description: "warning for store customer when the count is less than 3"
+        """
+        if self.product_type == 'simple':
+            return self.stock_quantity < 3
+        elif self.product_type == 'variable':
+            # Check if any variant has low stock
+            return any(variant.stock_quantity < 3 for variant in self.variants.filter(is_active=True))
+        return False
+    
+    def get_stock_warning_message(self):
+        """Get appropriate stock warning message for customers"""
+        if self.needs_stock_warning():
+            if self.stock_quantity == 0:
+                return 'ناموجود'
+            elif self.stock_quantity < 3:
+                return f'تنها {self.stock_quantity} عدد باقی مانده'
+        return ''
     
     @validate_on_save
     def save(self, *args, **kwargs):
@@ -514,11 +632,18 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
             from django.utils import timezone
             self.published_at = timezone.now()
         
+        # Call validation
+        self.full_clean()
+        
         super().save(*args, **kwargs)
     
     def get_inherited_attributes(self):
         """Get all attributes inherited from product class"""
         return self.product_class.get_inherited_attributes()
+    
+    def get_inherited_media(self):
+        """Get inherited media from product class"""
+        return self.product_class.get_inherited_media()
     
     @property
     def price(self):
@@ -557,6 +682,30 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
         """Increment sales count"""
         self.sales_count += quantity
         self.save(update_fields=['sales_count'])
+    
+    # ADDED: Social media import methods per product description
+    def import_from_social_media(self, platform, post_data):
+        """
+        Import content from social media platforms
+        Product description: "Get from social media" button functionality
+        """
+        self.imported_from_social = True
+        self.social_media_source = platform
+        self.social_media_post_id = post_data.get('post_id')
+        
+        # Store complete social media data
+        if not self.social_media_data:
+            self.social_media_data = {}
+        
+        self.social_media_data[platform] = post_data
+        
+        from django.utils import timezone
+        self.last_social_import = timezone.now()
+        
+        self.save(update_fields=[
+            'imported_from_social', 'social_media_source', 'social_media_post_id',
+            'social_media_data', 'last_social_import'
+        ])
 
 class ProductAttributeValue(TimestampMixin):
     """
@@ -680,6 +829,19 @@ class ProductVariant(PriceInheritanceMixin, TimestampMixin, AnalyticsMixin):
         if self.compare_price and self.compare_price > self.price:
             return round(((self.compare_price - self.price) / self.compare_price) * 100)
         return 0
+    
+    # ADDED: Stock warning for variants per product description
+    def needs_stock_warning(self):
+        """Check if variant needs stock warning (< 3 items)"""
+        return self.stock_quantity < 3
+    
+    def get_stock_warning_message(self):
+        """Get stock warning message for this variant"""
+        if self.stock_quantity == 0:
+            return 'ناموجود'
+        elif self.stock_quantity < 3:
+            return f'تنها {self.stock_quantity} عدد باقی مانده'
+        return ''
 
 class ProductImage(TimestampMixin):
     """Product images with social media import tracking"""
