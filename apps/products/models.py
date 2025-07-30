@@ -4,6 +4,195 @@ from mptt.models import MPTTModel, TreeForeignKey
 from django.core.cache import cache
 import uuid
 
+class AttributeType(models.Model):
+    """
+    Attribute types for product attributes (missing model)
+    """
+    TYPE_CHOICES = [
+        ('text', 'متن'),
+        ('color', 'رنگ'),
+        ('size', 'سایز'),
+        ('number', 'عدد'),
+        ('choice', 'انتخاب'),
+        ('boolean', 'بولی'),
+        ('date', 'تاریخ'),
+    ]
+    
+    name = models.CharField(max_length=50, unique=True, verbose_name='نام انگلیسی')
+    name_fa = models.CharField(max_length=50, verbose_name='نام فارسی')
+    slug = models.SlugField(max_length=50, unique=True, verbose_name='نامک')
+    data_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='text', verbose_name='نوع داده')
+    is_required = models.BooleanField(default=False, verbose_name='اجباری')
+    is_filterable = models.BooleanField(default=True, verbose_name='قابل فیلتر')
+    display_order = models.PositiveIntegerField(default=0, verbose_name='ترتیب نمایش')
+    
+    class Meta:
+        verbose_name = 'نوع ویژگی'
+        verbose_name_plural = 'انواع ویژگی'
+        ordering = ['display_order', 'name_fa']
+    
+    def __str__(self):
+        return self.name_fa
+
+class Tag(models.Model):
+    """
+    Product tags (missing model)
+    """
+    TAG_TYPES = [
+        ('general', 'عمومی'),
+        ('feature', 'ویژگی'),
+        ('category', 'دسته‌بندی'),
+        ('promotion', 'تخفیف'),
+        ('season', 'فصلی'),
+    ]
+    
+    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='tags')
+    name = models.CharField(max_length=50, verbose_name='نام')
+    name_fa = models.CharField(max_length=50, verbose_name='نام فارسی')
+    slug = models.SlugField(max_length=50, verbose_name='نامک')
+    description = models.TextField(blank=True, verbose_name='توضیحات')
+    tag_type = models.CharField(max_length=20, choices=TAG_TYPES, default='general', verbose_name='نوع برچسب')
+    color = models.CharField(max_length=7, default='#007bff', verbose_name='رنگ')
+    is_featured = models.BooleanField(default=False, verbose_name='برچسب ویژه')
+    is_filterable = models.BooleanField(default=True, verbose_name='قابل فیلتر')
+    usage_count = models.PositiveIntegerField(default=0, verbose_name='تعداد استفاده')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['store', 'slug']
+        verbose_name = 'برچسب'
+        verbose_name_plural = 'برچسب‌ها'
+        ordering = ['-usage_count', 'name_fa']
+        indexes = [
+            models.Index(fields=['store', 'tag_type']),
+            models.Index(fields=['is_featured', 'is_filterable']),
+        ]
+    
+    def __str__(self):
+        return self.name_fa
+
+class ProductClass(MPTTModel):
+    """
+    Object-oriented product class hierarchy with inheritance
+    This implements the core requirement for OOP product structure
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='product_classes')
+    
+    # Basic info
+    name = models.CharField(max_length=100, verbose_name='نام کلاس')
+    name_fa = models.CharField(max_length=100, verbose_name='نام فارسی')
+    slug = models.SlugField(max_length=100, verbose_name='نامک')
+    description = models.TextField(blank=True, verbose_name='توضیحات')
+    
+    # Hierarchy
+    parent = TreeForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='children',
+        verbose_name='کلاس والد'
+    )
+    
+    # Class properties that are inherited
+    base_price = models.DecimalField(
+        max_digits=12, 
+        decimal_places=0, 
+        null=True, 
+        blank=True,
+        verbose_name='قیمت پایه (وراثتی)'
+    )
+    
+    # Display properties
+    icon = models.CharField(max_length=50, blank=True, verbose_name='آیکون')
+    image = models.ImageField(upload_to='product_classes/', null=True, blank=True, verbose_name='تصویر')
+    display_order = models.PositiveIntegerField(default=0, verbose_name='ترتیب نمایش')
+    is_active = models.BooleanField(default=True, verbose_name='فعال')
+    is_leaf = models.BooleanField(default=True, verbose_name='کلاس برگ (قابل ایجاد محصول)')
+    
+    # Analytics
+    product_count = models.PositiveIntegerField(default=0, verbose_name='تعداد محصولات')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class MPTTMeta:
+        order_insertion_by = ['display_order', 'name_fa']
+    
+    class Meta:
+        verbose_name = 'کلاس محصول'
+        verbose_name_plural = 'کلاس‌های محصول'
+        unique_together = ['store', 'slug']
+        indexes = [
+            models.Index(fields=['store', 'is_active']),
+            models.Index(fields=['parent', 'display_order']),
+            models.Index(fields=['is_leaf']),
+        ]
+    
+    def __str__(self):
+        return self.name_fa or self.name
+    
+    def save(self, *args, **kwargs):
+        # Auto-generate is_leaf based on children
+        if self.pk:
+            has_children = self.get_children().exists()
+            self.is_leaf = not has_children
+        
+        super().save(*args, **kwargs)
+    
+    def get_inherited_attributes(self):
+        """Get all attributes inherited from ancestors"""
+        ancestors = self.get_ancestors(include_self=True)
+        return ProductClassAttribute.objects.filter(
+            product_class__in=ancestors
+        ).select_related('attribute_type')
+    
+    def get_effective_price(self):
+        """Get effective price with inheritance"""
+        if self.base_price:
+            return self.base_price
+        
+        # Look up the hierarchy for price
+        for ancestor in self.get_ancestors():
+            if ancestor.base_price:
+                return ancestor.base_price
+        
+        return 0
+    
+    def update_product_count(self):
+        """Update cached product count"""
+        descendant_ids = [self.id] + list(self.get_descendants().values_list('id', flat=True))
+        count = Product.objects.filter(
+            product_class_id__in=descendant_ids,
+            status='published'
+        ).count()
+        self.product_count = count
+        self.save(update_fields=['product_count'])
+        return count
+
+class ProductClassAttribute(models.Model):
+    """
+    Attributes defined at class level that are inherited by child classes
+    """
+    product_class = models.ForeignKey(ProductClass, on_delete=models.CASCADE, related_name='attributes')
+    attribute_type = models.ForeignKey(AttributeType, on_delete=models.CASCADE)
+    default_value = models.TextField(blank=True, verbose_name='مقدار پیش‌فرض')
+    is_required = models.BooleanField(default=False, verbose_name='اجباری')
+    is_inherited = models.BooleanField(default=True, verbose_name='وراثتی')
+    display_order = models.PositiveIntegerField(default=0, verbose_name='ترتیب نمایش')
+    
+    class Meta:
+        unique_together = ['product_class', 'attribute_type']
+        verbose_name = 'ویژگی کلاس محصول'
+        verbose_name_plural = 'ویژگی‌های کلاس محصول'
+        ordering = ['display_order', 'attribute_type__name_fa']
+    
+    def __str__(self):
+        return f"{self.product_class.name_fa} - {self.attribute_type.name_fa}"
+
 class ProductCategory(MPTTModel):
     """
     Simplified category model with inheritance support
@@ -103,30 +292,26 @@ class Brand(models.Model):
 
 class ProductAttribute(models.Model):
     """
-    Simple product attributes (color, size, etc.)
+    Category-level product attributes that can be applied to products
     """
-    ATTRIBUTE_TYPES = [
-        ('text', 'متن'),
-        ('color', 'رنگ'),
-        ('size', 'سایز'),
-        ('number', 'عدد'),
-        ('choice', 'انتخاب'),
-    ]
-    
-    name = models.CharField(max_length=50, verbose_name='نام ویژگی')
-    attribute_type = models.CharField(max_length=20, choices=ATTRIBUTE_TYPES, verbose_name='نوع')
-    values = models.JSONField(default=list, verbose_name='مقادیر ممکن')
+    category = models.ForeignKey(ProductCategory, on_delete=models.CASCADE, related_name='attributes')
+    attribute_type = models.ForeignKey(AttributeType, on_delete=models.CASCADE)
+    is_required = models.BooleanField(default=False, verbose_name='اجباری')
+    default_value = models.TextField(blank=True, verbose_name='مقدار پیش‌فرض')
+    display_order = models.PositiveIntegerField(default=0, verbose_name='ترتیب نمایش')
     
     class Meta:
+        unique_together = ['category', 'attribute_type']
         verbose_name = 'ویژگی محصول'
         verbose_name_plural = 'ویژگی‌های محصول'
+        ordering = ['display_order', 'attribute_type__name_fa']
     
     def __str__(self):
-        return self.name
+        return f"{self.category.name_fa} - {self.attribute_type.name_fa}"
 
 class Product(models.Model):
     """
-    Simplified product model - focusing on core functionality
+    Enhanced product model with object-oriented class support
     """
     STATUS_CHOICES = [
         ('draft', 'پیش‌نویس'),
@@ -135,10 +320,19 @@ class Product(models.Model):
         ('out_of_stock', 'ناموجود'),
     ]
     
+    PRODUCT_TYPES = [
+        ('simple', 'ساده'),
+        ('variable', 'متغیر'),
+        ('grouped', 'گروهی'),
+        ('external', 'خارجی'),
+    ]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='products')
+    product_class = models.ForeignKey(ProductClass, on_delete=models.CASCADE, related_name='products', verbose_name='کلاس محصول')
     category = models.ForeignKey(ProductCategory, on_delete=models.CASCADE, related_name='products')
     brand = models.ForeignKey(Brand, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
+    tags = models.ManyToManyField(Tag, blank=True, related_name='products', verbose_name='برچسب‌ها')
     
     # Basic information
     name = models.CharField(max_length=200, verbose_name='نام')
@@ -147,8 +341,17 @@ class Product(models.Model):
     description = models.TextField(blank=True, verbose_name='توضیحات')
     short_description = models.CharField(max_length=500, blank=True, verbose_name='توضیحات کوتاه')
     
-    # Pricing
-    price = models.DecimalField(max_digits=12, decimal_places=0, verbose_name='قیمت (تومان)')
+    # Product type and structure
+    product_type = models.CharField(max_length=20, choices=PRODUCT_TYPES, default='simple', verbose_name='نوع محصول')
+    
+    # Pricing (inherits from class if not set)
+    base_price = models.DecimalField(
+        max_digits=12, 
+        decimal_places=0, 
+        null=True,
+        blank=True,
+        verbose_name='قیمت پایه (تومان)'
+    )
     compare_price = models.DecimalField(
         max_digits=12, 
         decimal_places=0, 
@@ -187,6 +390,8 @@ class Product(models.Model):
     # Analytics
     view_count = models.PositiveIntegerField(default=0, verbose_name='تعداد بازدید')
     sales_count = models.PositiveIntegerField(default=0, verbose_name='تعداد فروش')
+    rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0, verbose_name='میانگین امتیاز')
+    rating_count = models.PositiveIntegerField(default=0, verbose_name='تعداد امتیاز')
     
     # Social media integration
     imported_from_social = models.BooleanField(default=False, verbose_name='وارد شده از شبکه اجتماعی')
@@ -211,13 +416,15 @@ class Product(models.Model):
         verbose_name_plural = 'محصولات'
         indexes = [
             models.Index(fields=['store', 'status', '-created_at']),
+            models.Index(fields=['product_class', 'status']),
             models.Index(fields=['category', 'status']),
             models.Index(fields=['brand', 'status']),
             models.Index(fields=['status', 'is_featured']),
-            models.Index(fields=['price']),
+            models.Index(fields=['base_price']),
             models.Index(fields=['sku']),
             models.Index(fields=['-view_count']),
             models.Index(fields=['-sales_count']),
+            models.Index(fields=['-rating_average']),
         ]
     
     def __str__(self):
@@ -235,10 +442,29 @@ class Product(models.Model):
         
         super().save(*args, **kwargs)
     
+    def get_effective_price(self):
+        """Get effective price with inheritance from product class"""
+        if self.base_price:
+            return self.base_price
+        return self.product_class.get_effective_price()
+    
+    def get_inherited_attributes(self):
+        """Get all attributes inherited from product class"""
+        return self.product_class.get_inherited_attributes()
+    
+    @property
+    def price(self):
+        """Computed property for final price"""
+        return self.get_effective_price()
+    
     @property
     def in_stock(self):
         """Check if product is in stock"""
-        return self.stock_quantity > 0
+        if self.product_type == 'simple':
+            return self.stock_quantity > 0
+        elif self.product_type == 'variable':
+            return self.variants.filter(stock_quantity__gt=0).exists()
+        return True
     
     @property
     def discount_percentage(self):
@@ -250,7 +476,14 @@ class Product(models.Model):
     @property
     def is_low_stock(self):
         """Check if product is low in stock"""
-        return self.stock_quantity <= self.low_stock_threshold
+        if self.product_type == 'simple':
+            return self.stock_quantity <= self.low_stock_threshold
+        elif self.product_type == 'variable':
+            return all(
+                variant.stock_quantity <= self.low_stock_threshold 
+                for variant in self.variants.all()
+            )
+        return False
     
     def increment_view_count(self):
         """Increment view count"""
@@ -261,6 +494,58 @@ class Product(models.Model):
         """Increment sales count"""
         self.sales_count += quantity
         self.save(update_fields=['sales_count'])
+
+class ProductAttributeValue(models.Model):
+    """
+    Attribute values for products and variants
+    """
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, null=True, blank=True, related_name='attribute_values')
+    variant = models.ForeignKey('ProductVariant', on_delete=models.CASCADE, null=True, blank=True, related_name='attribute_values')
+    attribute = models.ForeignKey(ProductAttribute, on_delete=models.CASCADE)
+    
+    # Different value types
+    value_text = models.TextField(blank=True, verbose_name='مقدار متنی')
+    value_number = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, verbose_name='مقدار عددی')
+    value_boolean = models.BooleanField(null=True, blank=True, verbose_name='مقدار بولی')
+    value_date = models.DateField(null=True, blank=True, verbose_name='مقدار تاریخ')
+    
+    class Meta:
+        verbose_name = 'مقدار ویژگی محصول'
+        verbose_name_plural = 'مقادیر ویژگی محصول'
+        unique_together = [
+            ['product', 'attribute'],
+            ['variant', 'attribute']
+        ]
+        indexes = [
+            models.Index(fields=['product', 'attribute']),
+            models.Index(fields=['variant', 'attribute']),
+        ]
+    
+    def __str__(self):
+        target = self.product or self.variant
+        return f"{target} - {self.attribute.attribute_type.name_fa}: {self.get_value()}"
+    
+    def get_value(self):
+        """Get the appropriate value based on attribute type"""
+        if self.attribute.attribute_type.data_type == 'number':
+            return self.value_number
+        elif self.attribute.attribute_type.data_type == 'boolean':
+            return self.value_boolean
+        elif self.attribute.attribute_type.data_type == 'date':
+            return self.value_date
+        else:
+            return self.value_text
+    
+    def set_value(self, value):
+        """Set the appropriate value based on attribute type"""
+        if self.attribute.attribute_type.data_type == 'number':
+            self.value_number = value
+        elif self.attribute.attribute_type.data_type == 'boolean':
+            self.value_boolean = value
+        elif self.attribute.attribute_type.data_type == 'date':
+            self.value_date = value
+        else:
+            self.value_text = str(value)
 
 class ProductVariant(models.Model):
     """
@@ -282,9 +567,6 @@ class ProductVariant(models.Model):
     # Variant-specific media
     image = models.ImageField(upload_to='variants/', null=True, blank=True, verbose_name='تصویر نوع محصول')
     
-    # Attributes as JSON for simplicity
-    attributes = models.JSONField(default=dict, verbose_name='ویژگی‌ها')
-    
     # Status
     is_active = models.BooleanField(default=True, verbose_name='فعال')
     is_default = models.BooleanField(default=False, verbose_name='پیش‌فرض')
@@ -303,7 +585,10 @@ class ProductVariant(models.Model):
         ]
     
     def __str__(self):
-        attrs = ", ".join([f"{k}: {v}" for k, v in self.attributes.items()])
+        attrs = ", ".join([
+            f"{attr_val.attribute.attribute_type.name_fa}: {attr_val.get_value()}" 
+            for attr_val in self.attribute_values.all()
+        ])
         return f"{self.product.name_fa} - {attrs}"
     
     def save(self, *args, **kwargs):
@@ -382,13 +667,14 @@ class Collection(models.Model):
         return self.name_fa or self.name
 
 # Signal handlers
-from django.db.models.signals import post_save, pre_delete
+from django.db.models.signals import post_save, pre_delete, m2m_changed
 from django.dispatch import receiver
 
 @receiver(post_save, sender=Product)
 def update_category_product_count(sender, instance, **kwargs):
     """Update category product count when product is saved"""
     instance.category.update_product_count()
+    instance.product_class.update_product_count()
 
 @receiver(post_save, sender=Product)
 def update_brand_product_count(sender, instance, **kwargs):
@@ -400,5 +686,25 @@ def update_brand_product_count(sender, instance, **kwargs):
 def update_counts_on_delete(sender, instance, **kwargs):
     """Update counts when product is deleted"""
     instance.category.update_product_count()
+    instance.product_class.update_product_count()
     if instance.brand:
         instance.brand.update_product_count()
+
+@receiver(m2m_changed, sender=Product.tags.through)
+def update_tag_usage_count(sender, instance, action, pk_set, **kwargs):
+    """Update tag usage count when tags are added/removed"""
+    if action in ['post_add', 'post_remove']:
+        for tag_id in pk_set or []:
+            try:
+                tag = Tag.objects.get(id=tag_id)
+                tag.usage_count = tag.products.count()
+                tag.save(update_fields=['usage_count'])
+            except Tag.DoesNotExist:
+                pass
+
+@receiver(post_save, sender=ProductClass)
+def update_leaf_status(sender, instance, **kwargs):
+    """Update is_leaf status for product classes"""
+    if instance.parent:
+        instance.parent.is_leaf = False
+        instance.parent.save(update_fields=['is_leaf'])
