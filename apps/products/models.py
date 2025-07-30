@@ -2,11 +2,16 @@ from django.db import models
 from django.core.exceptions import ValidationError
 from mptt.models import MPTTModel, TreeForeignKey
 from django.core.cache import cache
+from apps.core.mixins import (
+    PriceInheritanceMixin, TimestampMixin, SlugMixin, 
+    SEOMixin, ViewCountMixin, AnalyticsMixin, StoreOwnedMixin
+)
+from apps.core.validation import validate_on_save
 import uuid
 
-class AttributeType(models.Model):
+class AttributeType(TimestampMixin, SlugMixin):
     """
-    Attribute types for product attributes (missing model)
+    Attribute types for product attributes
     """
     TYPE_CHOICES = [
         ('text', 'متن'),
@@ -20,7 +25,6 @@ class AttributeType(models.Model):
     
     name = models.CharField(max_length=50, unique=True, verbose_name='نام انگلیسی')
     name_fa = models.CharField(max_length=50, verbose_name='نام فارسی')
-    slug = models.SlugField(max_length=50, unique=True, verbose_name='نامک')
     data_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='text', verbose_name='نوع داده')
     is_required = models.BooleanField(default=False, verbose_name='اجباری')
     is_filterable = models.BooleanField(default=True, verbose_name='قابل فیلتر')
@@ -34,9 +38,9 @@ class AttributeType(models.Model):
     def __str__(self):
         return self.name_fa
 
-class Tag(models.Model):
+class Tag(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     """
-    Product tags (missing model)
+    Product tags with usage tracking
     """
     TAG_TYPES = [
         ('general', 'عمومی'),
@@ -46,19 +50,14 @@ class Tag(models.Model):
         ('season', 'فصلی'),
     ]
     
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='tags')
     name = models.CharField(max_length=50, verbose_name='نام')
     name_fa = models.CharField(max_length=50, verbose_name='نام فارسی')
-    slug = models.SlugField(max_length=50, verbose_name='نامک')
     description = models.TextField(blank=True, verbose_name='توضیحات')
     tag_type = models.CharField(max_length=20, choices=TAG_TYPES, default='general', verbose_name='نوع برچسب')
     color = models.CharField(max_length=7, default='#007bff', verbose_name='رنگ')
     is_featured = models.BooleanField(default=False, verbose_name='برچسب ویژه')
     is_filterable = models.BooleanField(default=True, verbose_name='قابل فیلتر')
     usage_count = models.PositiveIntegerField(default=0, verbose_name='تعداد استفاده')
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         unique_together = ['store', 'slug']
@@ -73,18 +72,16 @@ class Tag(models.Model):
     def __str__(self):
         return self.name_fa
 
-class ProductClass(MPTTModel):
+class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     """
     Object-oriented product class hierarchy with inheritance
-    This implements the core requirement for OOP product structure
+    Implements the core OOP requirement with unlimited depth
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='product_classes')
     
     # Basic info
     name = models.CharField(max_length=100, verbose_name='نام کلاس')
     name_fa = models.CharField(max_length=100, verbose_name='نام فارسی')
-    slug = models.SlugField(max_length=100, verbose_name='نامک')
     description = models.TextField(blank=True, verbose_name='توضیحات')
     
     # Hierarchy
@@ -116,9 +113,6 @@ class ProductClass(MPTTModel):
     # Analytics
     product_count = models.PositiveIntegerField(default=0, verbose_name='تعداد محصولات')
     
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
     class MPTTMeta:
         order_insertion_by = ['display_order', 'name_fa']
     
@@ -135,6 +129,7 @@ class ProductClass(MPTTModel):
     def __str__(self):
         return self.name_fa or self.name
     
+    @validate_on_save
     def save(self, *args, **kwargs):
         # Auto-generate is_leaf based on children
         if self.pk:
@@ -150,18 +145,6 @@ class ProductClass(MPTTModel):
             product_class__in=ancestors
         ).select_related('attribute_type')
     
-    def get_effective_price(self):
-        """Get effective price with inheritance"""
-        if self.base_price:
-            return self.base_price
-        
-        # Look up the hierarchy for price
-        for ancestor in self.get_ancestors():
-            if ancestor.base_price:
-                return ancestor.base_price
-        
-        return 0
-    
     def update_product_count(self):
         """Update cached product count"""
         descendant_ids = [self.id] + list(self.get_descendants().values_list('id', flat=True))
@@ -173,7 +156,7 @@ class ProductClass(MPTTModel):
         self.save(update_fields=['product_count'])
         return count
 
-class ProductClassAttribute(models.Model):
+class ProductClassAttribute(TimestampMixin):
     """
     Attributes defined at class level that are inherited by child classes
     """
@@ -193,17 +176,15 @@ class ProductClassAttribute(models.Model):
     def __str__(self):
         return f"{self.product_class.name_fa} - {self.attribute_type.name_fa}"
 
-class ProductCategory(MPTTModel):
+class ProductCategory(MPTTModel, StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     """
-    Simplified category model with inheritance support
+    Product categories with hierarchical structure
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='categories')
     
     # Basic info
     name = models.CharField(max_length=100, verbose_name='نام')
     name_fa = models.CharField(max_length=100, verbose_name='نام فارسی')
-    slug = models.SlugField(max_length=100, verbose_name='نامک')
     description = models.TextField(blank=True, verbose_name='توضیحات')
     
     # Hierarchy
@@ -224,9 +205,6 @@ class ProductCategory(MPTTModel):
     
     # Analytics
     product_count = models.PositiveIntegerField(default=0, verbose_name='تعداد محصولات')
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     
     class MPTTMeta:
         order_insertion_by = ['display_order', 'name_fa']
@@ -254,22 +232,17 @@ class ProductCategory(MPTTModel):
         self.save(update_fields=['product_count'])
         return count
 
-class Brand(models.Model):
-    """Brand management"""
+class Brand(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
+    """Brand management with analytics"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='brands')
     
     name = models.CharField(max_length=100, verbose_name='نام')
     name_fa = models.CharField(max_length=100, verbose_name='نام فارسی')
-    slug = models.SlugField(max_length=100, verbose_name='نامک')
     logo = models.ImageField(upload_to='brands/', null=True, blank=True, verbose_name='لوگو')
     description = models.TextField(blank=True, verbose_name='توضیحات')
     
     is_active = models.BooleanField(default=True, verbose_name='فعال')
     product_count = models.PositiveIntegerField(default=0, verbose_name='تعداد محصولات')
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         unique_together = ['store', 'slug']
@@ -290,7 +263,7 @@ class Brand(models.Model):
         self.save(update_fields=['product_count'])
         return count
 
-class ProductAttribute(models.Model):
+class ProductAttribute(TimestampMixin):
     """
     Category-level product attributes that can be applied to products
     """
@@ -309,9 +282,9 @@ class ProductAttribute(models.Model):
     def __str__(self):
         return f"{self.category.name_fa} - {self.attribute_type.name_fa}"
 
-class Product(models.Model):
+class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin, SEOMixin, ViewCountMixin, AnalyticsMixin):
     """
-    Enhanced product model with object-oriented class support
+    Enhanced product model with object-oriented class support and comprehensive features
     """
     STATUS_CHOICES = [
         ('draft', 'پیش‌نویس'),
@@ -328,7 +301,6 @@ class Product(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='products')
     product_class = models.ForeignKey(ProductClass, on_delete=models.CASCADE, related_name='products', verbose_name='کلاس محصول')
     category = models.ForeignKey(ProductCategory, on_delete=models.CASCADE, related_name='products')
     brand = models.ForeignKey(Brand, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
@@ -337,7 +309,6 @@ class Product(models.Model):
     # Basic information
     name = models.CharField(max_length=200, verbose_name='نام')
     name_fa = models.CharField(max_length=200, verbose_name='نام فارسی')
-    slug = models.SlugField(max_length=200, verbose_name='نامک')
     description = models.TextField(blank=True, verbose_name='توضیحات')
     short_description = models.CharField(max_length=500, blank=True, verbose_name='توضیحات کوتاه')
     
@@ -379,16 +350,11 @@ class Product(models.Model):
     # Physical properties
     weight = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, verbose_name='وزن (گرم)')
     
-    # SEO
-    meta_title = models.CharField(max_length=200, blank=True, verbose_name='عنوان متا')
-    meta_description = models.TextField(blank=True, verbose_name='توضیحات متا')
-    
     # Status
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='وضعیت')
     is_featured = models.BooleanField(default=False, verbose_name='محصول ویژه')
     
-    # Analytics
-    view_count = models.PositiveIntegerField(default=0, verbose_name='تعداد بازدید')
+    # Additional analytics (beyond ViewCountMixin)
     sales_count = models.PositiveIntegerField(default=0, verbose_name='تعداد فروش')
     rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0, verbose_name='میانگین امتیاز')
     rating_count = models.PositiveIntegerField(default=0, verbose_name='تعداد امتیاز')
@@ -404,9 +370,7 @@ class Product(models.Model):
     )
     social_media_post_id = models.CharField(max_length=100, null=True, blank=True, verbose_name='شناسه پست')
     
-    # Timestamps
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name='تاریخ ایجاد')
-    updated_at = models.DateTimeField(auto_now=True, verbose_name='تاریخ به‌روزرسانی')
+    # Timestamps (from TimestampMixin, but need to override for published_at)
     published_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ انتشار')
     
     class Meta:
@@ -430,6 +394,7 @@ class Product(models.Model):
     def __str__(self):
         return self.name_fa or self.name
     
+    @validate_on_save
     def save(self, *args, **kwargs):
         # Auto-generate SKU if not provided
         if not self.sku:
@@ -441,12 +406,6 @@ class Product(models.Model):
             self.published_at = timezone.now()
         
         super().save(*args, **kwargs)
-    
-    def get_effective_price(self):
-        """Get effective price with inheritance from product class"""
-        if self.base_price:
-            return self.base_price
-        return self.product_class.get_effective_price()
     
     def get_inherited_attributes(self):
         """Get all attributes inherited from product class"""
@@ -485,19 +444,14 @@ class Product(models.Model):
             )
         return False
     
-    def increment_view_count(self):
-        """Increment view count"""
-        self.view_count += 1
-        self.save(update_fields=['view_count'])
-    
     def increment_sales_count(self, quantity=1):
         """Increment sales count"""
         self.sales_count += quantity
         self.save(update_fields=['sales_count'])
 
-class ProductAttributeValue(models.Model):
+class ProductAttributeValue(TimestampMixin):
     """
-    Attribute values for products and variants
+    Attribute values for products and variants with multi-type support
     """
     product = models.ForeignKey(Product, on_delete=models.CASCADE, null=True, blank=True, related_name='attribute_values')
     variant = models.ForeignKey('ProductVariant', on_delete=models.CASCADE, null=True, blank=True, related_name='attribute_values')
@@ -547,7 +501,7 @@ class ProductAttributeValue(models.Model):
         else:
             self.value_text = str(value)
 
-class ProductVariant(models.Model):
+class ProductVariant(PriceInheritanceMixin, TimestampMixin, AnalyticsMixin):
     """
     Product variants for different attribute combinations
     """
@@ -570,9 +524,6 @@ class ProductVariant(models.Model):
     # Status
     is_active = models.BooleanField(default=True, verbose_name='فعال')
     is_default = models.BooleanField(default=False, verbose_name='پیش‌فرض')
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         ordering = ['price']
@@ -610,8 +561,8 @@ class ProductVariant(models.Model):
             return round(((self.compare_price - self.price) / self.compare_price) * 100)
         return 0
 
-class ProductImage(models.Model):
-    """Product images"""
+class ProductImage(TimestampMixin):
+    """Product images with social media import tracking"""
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
     variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, null=True, blank=True, related_name='images')
     
@@ -624,8 +575,6 @@ class ProductImage(models.Model):
     imported_from_social = models.BooleanField(default=False, verbose_name='وارد شده از شبکه اجتماعی')
     social_media_url = models.URLField(null=True, blank=True, verbose_name='لینک اصلی')
     
-    created_at = models.DateTimeField(auto_now_add=True)
-    
     class Meta:
         ordering = ['display_order', 'created_at']
         verbose_name = 'تصویر محصول'
@@ -637,12 +586,10 @@ class ProductImage(models.Model):
             target += f" - {self.variant}"
         return f"تصویر {target}"
 
-class Collection(models.Model):
+class Collection(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     """Product collections for marketing"""
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='collections')
     name = models.CharField(max_length=100, verbose_name='نام مجموعه')
     name_fa = models.CharField(max_length=100, verbose_name='نام فارسی')
-    slug = models.SlugField(max_length=100, verbose_name='نامک')
     description = models.TextField(blank=True, verbose_name='توضیحات')
     
     # Display
@@ -654,9 +601,6 @@ class Collection(models.Model):
     # Products
     products = models.ManyToManyField(Product, blank=True, related_name='collections', verbose_name='محصولات')
     
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
     class Meta:
         unique_together = ['store', 'slug']
         ordering = ['display_order', 'name_fa']
@@ -666,7 +610,7 @@ class Collection(models.Model):
     def __str__(self):
         return self.name_fa or self.name
 
-# Signal handlers
+# Signal handlers for maintaining data consistency
 from django.db.models.signals import post_save, pre_delete, m2m_changed
 from django.dispatch import receiver
 
