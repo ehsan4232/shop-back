@@ -54,6 +54,44 @@ factory-boy==3.3.0
 python-decouple==3.8
 django-extensions==3.2.3
 
-# Additional packages for completeness
+# FIX: Additional packages for completeness and consistency
 django-jsonfield==3.1.0
 django-model-utils==4.3.1
+
+# FIX: Add missing packages identified during review
+django-environ==0.11.2  # Better environment management
+django-crispy-forms==2.1  # Form rendering
+crispy-bootstrap5==0.7  # Bootstrap 5 support for crispy forms
+django-cleanup==8.0.0  # Auto cleanup of files
+django-compressor==4.4  # CSS/JS compression
+django-imagekit==5.0.0  # Image processing
+django-taggit==5.0.1  # Enhanced tagging support
+django-money==3.4.1  # Multi-currency support
+phonenumbers==8.13.25  # Phone number validation
+django-phonenumber-field==7.3.0  # Phone number field
+django-countries==7.5.1  # Country field support
+django-timezone-field==6.0.1  # Timezone field support
+
+# Performance & Monitoring
+django-cachalot==2.6.1  # Advanced ORM caching
+django-silk==5.0.4  # Request profiling
+sentry-sdk[django]==1.38.0  # Error monitoring
+
+# API Documentation
+django-rest-swagger==2.2.0  # Swagger UI (alternative to drf-spectacular)
+
+# Social Media Integration (Enhanced)
+python-telegram-bot==20.7  # Telegram Bot API
+instagrapi==2.0.0  # Instagram Private API (be careful with ToS)
+facebook-sdk==3.1.0  # Facebook Graph API
+
+# Search & Analytics
+django-haystack==3.2.1  # Search framework
+elasticsearch-dsl==8.11.0  # Elasticsearch integration
+django-analytical==3.1.0  # Analytics integration
+
+# Internationalization (Enhanced Persian Support)
+django-modeltranslation==0.18.11  # Model translation
+django-rosetta==0.9.9  # Translation interface
+persiantools==4.0.0  # Persian text processing
+jdatetime==4.1.0  # Persian calendar support
