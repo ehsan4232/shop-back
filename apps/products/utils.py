@@ -1,361 +1,351 @@
-import uuid
-import re
-from typing import Dict, List, Optional, Tuple
-from django.db import transaction
+from django.db.models import Sum
 from django.core.cache import cache
-from django.utils.text import slugify
-from django.db import models
-from .models import Product, ProductClass, ProductCategory, ProductImage
+from decimal import Decimal
+from typing import Dict, List, Optional, Any
+from PIL import Image
+import io
+from django.core.files.uploadedfile import InMemoryUploadedFile
 
-class ProductUtils:
-    """Product-related utility functions"""
-    
-    @staticmethod
-    def generate_unique_sku(product_class: ProductClass, store_id: str) -> str:
-        """Generate unique SKU based on product class and store"""
-        # Create base SKU from product class
-        base = product_class.name.upper()[:3]
-        if len(base) < 3:
-            base = base.ljust(3, 'X')
-        
-        # Add store prefix (first 2 chars of store ID)
-        store_prefix = str(store_id)[:2].upper()
-        
-        # Generate unique suffix
-        counter = 1
-        while True:
-            sku = f"{store_prefix}{base}{counter:04d}"
-            if not Product.objects.filter(sku=sku).exists():
-                return sku
-            counter += 1
-            if counter > 9999:  # Prevent infinite loop
-                # Fallback to UUID-based SKU
-                return f"{store_prefix}{uuid.uuid4().hex[:6].upper()}"
-    
-    @staticmethod
-    def generate_unique_slug(name: str, model_class, store_id: Optional[str] = None) -> str:
-        """Generate unique slug for products/categories"""
-        base_slug = slugify(name, allow_unicode=True)
-        
-        # Start with base slug
-        slug = base_slug
-        counter = 1
-        
-        while True:
-            # Check if slug exists
-            queryset = model_class.objects.filter(slug=slug)
-            if store_id:
-                queryset = queryset.filter(store_id=store_id)
-            
-            if not queryset.exists():
-                return slug
-            
-            # Try with counter
-            slug = f"{base_slug}-{counter}"
-            counter += 1
-            
-            # Prevent infinite loop
-            if counter > 1000:
-                slug = f"{base_slug}-{uuid.uuid4().hex[:6]}"
-                break
-        
-        return slug
-    
-    @staticmethod
-    def extract_price_from_text(text: str) -> Optional[float]:
-        """Extract price from Persian/English text"""
-        if not text:
-            return None
-        
-        # Persian to English number conversion
-        persian_to_english = {
-            '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
-            '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9'
-        }
-        
-        # Convert Persian numbers
-        for persian, english in persian_to_english.items():
-            text = text.replace(persian, english)
-        
-        # Price patterns
-        patterns = [
-            r'(\d{1,3}(?:[,،]\d{3})*)\s*(?:تومان|ریال|درهم)',
-            r'قیمت[:\s]*(\d{1,3}(?:[,،]\d{3})*)',
-            r'(\d{1,3}(?:[,،]\d{3})*)\s*(?:هزار\s*)?تومان',
-            r'(\d+)\s*(?:T|تومان)',
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, text)
-            if matches:
-                try:
-                    # Clean and convert to float
-                    price_str = matches[0].replace(',', '').replace('،', '')
-                    return float(price_str)
-                except (ValueError, IndexError):
-                    continue
-        
+
+def optimize_product_image(image_file, max_width: int = 800, max_height: int = 600, quality: int = 85):
+    """
+    Optimize product image for web display
+    """
+    if not image_file:
         return None
     
-    @staticmethod
-    def bulk_update_product_counts():
-        """Update product counts for all categories and classes"""
-        with transaction.atomic():
-            # Update category counts
-            for category in ProductCategory.objects.all():
-                category.update_product_count()
-            
-            # Update product class counts
-            for product_class in ProductClass.objects.all():
-                product_class.update_product_count()
-    
-    @staticmethod
-    def optimize_product_images(product: Product) -> Dict:
-        """Optimize product images (resize, compress, etc.)"""
-        results = {
-            'processed': 0,
-            'errors': []
-        }
+    try:
+        # Open image
+        img = Image.open(image_file)
         
-        try:
-            from PIL import Image
-            import io
-            from django.core.files.base import ContentFile
-            
-            for product_image in product.images.all():
-                try:
-                    # Open image
-                    image = Image.open(product_image.image.path)
-                    
-                    # Resize if too large
-                    max_size = (1200, 1200)
-                    if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
-                        image.thumbnail(max_size, Image.Resampling.LANCZOS)
-                    
-                    # Convert to RGB if necessary
-                    if image.mode in ('RGBA', 'P'):
-                        image = image.convert('RGB')
-                    
-                    # Save optimized image
-                    output = io.BytesIO()
-                    image.save(output, format='JPEG', quality=85, optimize=True)
-                    output.seek(0)
-                    
-                    # Update the image file
-                    product_image.image.save(
-                        product_image.image.name,
-                        ContentFile(output.getvalue()),
-                        save=True
-                    )
-                    
-                    results['processed'] += 1
-                    
-                except Exception as e:
-                    results['errors'].append(f"Error processing image {product_image.id}: {str(e)}")
-            
-        except ImportError:
-            results['errors'].append("PIL not available for image optimization")
+        # Convert to RGB if necessary
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
         
-        return results
+        # Calculate new dimensions
+        width, height = img.size
+        if width > max_width or height > max_height:
+            img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+        
+        # Save optimized image
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=quality, optimize=True)
+        output.seek(0)
+        
+        # Create new uploaded file
+        optimized_file = InMemoryUploadedFile(
+            output,
+            'ImageField',
+            f"{image_file.name.split('.')[0]}_optimized.jpg",
+            'image/jpeg',
+            output.getbuffer().nbytes,
+            None
+        )
+        
+        return optimized_file
     
-    @staticmethod
-    def get_product_hierarchy_cache_key(store_id: str) -> str:
-        """Get cache key for product hierarchy"""
-        return f"product_hierarchy_{store_id}"
-    
-    @staticmethod
-    def cache_product_hierarchy(store_id: str, data: Dict, timeout: int = 3600):
-        """Cache product hierarchy data"""
-        cache_key = ProductUtils.get_product_hierarchy_cache_key(store_id)
-        cache.set(cache_key, data, timeout)
-    
-    @staticmethod
-    def get_cached_product_hierarchy(store_id: str) -> Optional[Dict]:
-        """Get cached product hierarchy"""
-        cache_key = ProductUtils.get_product_hierarchy_cache_key(store_id)
-        return cache.get(cache_key)
-    
-    @staticmethod
-    def invalidate_product_hierarchy_cache(store_id: str):
-        """Invalidate product hierarchy cache"""
-        cache_key = ProductUtils.get_product_hierarchy_cache_key(store_id)
-        cache.delete(cache_key)
+    except Exception:
+        # Return original if optimization fails
+        return image_file
 
-class InventoryManager:
-    """Inventory management utilities"""
+
+def calculate_shipping_cost(product, quantity: int = 1, destination: str = None) -> Decimal:
+    """
+    Calculate shipping cost for a product
+    """
+    base_cost = Decimal('50000')  # Base shipping cost in Tomans
     
-    @staticmethod
-    def check_low_stock_products(store) -> List[Product]:
-        """Get products with low stock"""
-        return Product.objects.filter(
-            store=store,
-            manage_stock=True,
-            stock_quantity__lte=models.F('low_stock_threshold'),
-            stock_quantity__gt=0,
-            status='published'
-        ).select_related('category', 'product_class')
+    # Weight-based calculation
+    if product.weight:
+        weight_cost = product.weight * Decimal('1000')  # 1000 Tomans per gram
+        base_cost += weight_cost
     
-    @staticmethod
-    def update_stock_quantity(product: Product, quantity_change: int, 
-                            reason: str = '', user=None) -> Dict:
-        """Update stock quantity with logging"""
-        try:
-            with transaction.atomic():
-                old_quantity = product.stock_quantity
-                new_quantity = max(0, old_quantity + quantity_change)
-                
-                product.stock_quantity = new_quantity
-                product.save(update_fields=['stock_quantity'])
-                
-                return {
-                    'success': True,
-                    'old_quantity': old_quantity,
-                    'new_quantity': new_quantity,
-                    'change': quantity_change
-                }
-                
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
+    # Quantity adjustment
+    if quantity > 1:
+        base_cost *= Decimal(str(quantity * 0.8))  # Volume discount
     
-    @staticmethod
-    def bulk_stock_update(updates: List[Dict]) -> Dict:
-        """Bulk update stock quantities"""
-        results = {
-            'successful': 0,
-            'failed': 0,
-            'errors': []
-        }
+    # Destination-based adjustment (mock implementation)
+    if destination:
+        if destination in ['tehran', 'تهران']:
+            base_cost *= Decimal('1.0')  # No extra cost
+        elif destination in ['isfahan', 'اصفهان', 'mashhad', 'مشهد']:
+            base_cost *= Decimal('1.2')  # 20% extra
+        else:
+            base_cost *= Decimal('1.5')  # 50% extra for other cities
+    
+    return base_cost
+
+
+def generate_product_sku(product_class=None, category=None, store=None) -> str:
+    """
+    Generate a unique SKU for a product
+    """
+    import uuid
+    import datetime
+    
+    parts = []
+    
+    # Store prefix
+    if store:
+        parts.append(store.name[:3].upper())
+    
+    # Category prefix
+    if category:
+        parts.append(category.name[:2].upper())
+    
+    # Product class prefix
+    if product_class:
+        parts.append(product_class.name[:2].upper())
+    
+    # Date component
+    today = datetime.date.today()
+    parts.append(f"{today.year}{today.month:02d}")
+    
+    # Random component
+    parts.append(uuid.uuid4().hex[:4].upper())
+    
+    return '-'.join(parts)
+
+
+def get_price_history(product, days: int = 30) -> List[Dict]:
+    """
+    Get price history for a product (mock implementation)
+    """
+    import datetime
+    from decimal import Decimal
+    
+    # In real implementation, this would fetch from price history table
+    current_price = product.get_effective_price()
+    history = []
+    
+    for i in range(days):
+        date = datetime.date.today() - datetime.timedelta(days=i)
+        # Mock price variation
+        variation = Decimal(str(1 + (i % 7) * 0.02))  # Small variations
+        price = current_price * variation
         
-        try:
-            with transaction.atomic():
-                for update in updates:
-                    try:
-                        product = Product.objects.get(id=update['product_id'])
-                        result = InventoryManager.update_stock_quantity(
-                            product=product,
-                            quantity_change=update['quantity_change'],
-                            reason=update.get('reason', ''),
-                            user=update.get('user')
-                        )
-                        
-                        if result['success']:
-                            results['successful'] += 1
-                        else:
-                            results['failed'] += 1
-                            results['errors'].append(f"Product {update['product_id']}: {result['error']}")
+        history.append({
+            'date': date.isoformat(),
+            'price': float(price),
+            'currency': 'IRR'
+        })
+    
+    return history[::-1]  # Reverse to chronological order
+
+
+def calculate_discount_impact(product, new_price: Decimal) -> Dict[str, Any]:
+    """
+    Calculate the impact of a price change on product metrics
+    """
+    current_price = product.get_effective_price()
+    
+    if current_price == 0:
+        return {'error': 'Current price is zero'}
+    
+    price_change_percent = ((new_price - current_price) / current_price) * 100
+    
+    # Estimated demand elasticity (mock calculation)
+    elasticity = -1.5  # Assume price elastic product
+    estimated_demand_change = elasticity * price_change_percent
+    
+    # Calculate revenue impact
+    estimated_sales_change = estimated_demand_change / 100
+    new_estimated_sales = product.sales_count * (1 + estimated_sales_change)
+    
+    current_revenue = current_price * product.sales_count
+    new_revenue = new_price * new_estimated_sales
+    revenue_change = new_revenue - current_revenue
+    
+    return {
+        'current_price': float(current_price),
+        'new_price': float(new_price),
+        'price_change_percent': round(price_change_percent, 2),
+        'estimated_demand_change_percent': round(estimated_demand_change, 2),
+        'estimated_sales_change': round(estimated_sales_change, 2),
+        'current_revenue': float(current_revenue),
+        'estimated_new_revenue': float(new_revenue),
+        'estimated_revenue_change': float(revenue_change),
+        'revenue_change_percent': round((revenue_change / current_revenue) * 100, 2) if current_revenue > 0 else 0
+    }
+
+
+def get_competitor_prices(product, category=None) -> List[Dict]:
+    """
+    Get competitor prices for similar products (mock implementation)
+    """
+    # In real implementation, this would integrate with competitor analysis APIs
+    current_price = product.get_effective_price()
+    
+    competitors = [
+        {
+            'competitor_name': 'فروشگاه رقیب ۱',
+            'price': float(current_price * Decimal('0.95')),
+            'url': 'https://competitor1.com/product',
+            'availability': 'in_stock',
+            'last_updated': '2025-07-30T20:00:00Z'
+        },
+        {
+            'competitor_name': 'فروشگاه رقیب ۲',
+            'price': float(current_price * Decimal('1.05')),
+            'url': 'https://competitor2.com/product',
+            'availability': 'in_stock',
+            'last_updated': '2025-07-30T19:30:00Z'
+        },
+        {
+            'competitor_name': 'فروشگاه رقیب ۳',
+            'price': float(current_price * Decimal('0.98')),
+            'url': 'https://competitor3.com/product',
+            'availability': 'limited_stock',
+            'last_updated': '2025-07-30T19:45:00Z'
+        }
+    ]
+    
+    return competitors
+
+
+def validate_inventory_levels(store) -> Dict[str, Any]:
+    """
+    Validate inventory levels and identify issues
+    """
+    from apps.products.models import Product
+    
+    products = Product.objects.filter(store=store, status='published')
+    
+    issues = {
+        'out_of_stock': [],
+        'low_stock': [],
+        'overstocked': [],
+        'no_stock_tracking': []
+    }
+    
+    for product in products:
+        if not product.manage_stock:
+            issues['no_stock_tracking'].append({
+                'id': str(product.id),
+                'name': product.name_fa,
+                'sku': product.sku
+            })
+        elif product.stock_quantity == 0:
+            issues['out_of_stock'].append({
+                'id': str(product.id),
+                'name': product.name_fa,
+                'sku': product.sku,
+                'stock': product.stock_quantity
+            })
+        elif product.stock_quantity <= product.low_stock_threshold:
+            issues['low_stock'].append({
+                'id': str(product.id),
+                'name': product.name_fa,
+                'sku': product.sku,
+                'stock': product.stock_quantity,
+                'threshold': product.low_stock_threshold
+            })
+        elif product.stock_quantity > 1000:  # Arbitrary "overstocked" threshold
+            issues['overstocked'].append({
+                'id': str(product.id),
+                'name': product.name_fa,
+                'sku': product.sku,
+                'stock': product.stock_quantity
+            })
+    
+    summary = {
+        'total_products': products.count(),
+        'total_issues': sum(len(issue_list) for issue_list in issues.values()),
+        'issues': issues
+    }
+    
+    return summary
+
+
+def bulk_update_prices(products, price_change_percent: float, apply_to: str = 'all'):
+    """
+    Bulk update product prices
+    """
+    from apps.products.models import Product
+    from django.db import transaction
+    
+    updated_count = 0
+    errors = []
+    
+    with transaction.atomic():
+        for product in products:
+            try:
+                current_price = product.get_effective_price()
+                if current_price > 0:
+                    new_price = current_price * (1 + price_change_percent / 100)
                     
-                    except Product.DoesNotExist:
-                        results['failed'] += 1
-                        results['errors'].append(f"Product {update['product_id']} not found")
-                    except Exception as e:
-                        results['failed'] += 1
-                        results['errors'].append(f"Product {update['product_id']}: {str(e)}")
-        
-        except Exception as e:
-            results['errors'].append(f"Transaction error: {str(e)}")
-        
-        return results
+                    if apply_to == 'base_price' or not product.base_price:
+                        product.base_price = new_price
+                        product.save(update_fields=['base_price', 'updated_at'])
+                        updated_count += 1
+                    
+                    # Update variants if they exist
+                    if apply_to in ['all', 'variants']:
+                        for variant in product.variants.all():
+                            variant.price = variant.price * (1 + price_change_percent / 100)
+                            variant.save(update_fields=['price', 'updated_at'])
+                
+            except Exception as e:
+                errors.append({
+                    'product_id': str(product.id),
+                    'product_name': product.name_fa,
+                    'error': str(e)
+                })
+    
+    return {
+        'updated_count': updated_count,
+        'total_products': len(products),
+        'errors': errors,
+        'success_rate': (updated_count / len(products)) * 100 if products else 0
+    }
 
-class SearchUtils:
-    """Search and filtering utilities"""
-    
-    @staticmethod
-    def build_search_query(search_term: str, store_id: str) -> Dict:
-        """Build optimized search query"""
-        from django.db.models import Q
-        
-        if not search_term:
-            return {'query': Q(), 'highlighted_fields': []}
-        
-        # Split search term into words
-        words = search_term.strip().split()
-        
-        # Build query for each word
-        query = Q()
-        highlighted_fields = []
-        
-        for word in words:
-            word_query = (
-                Q(name_fa__icontains=word) |
-                Q(name__icontains=word) |
-                Q(description__icontains=word) |
-                Q(short_description__icontains=word) |
-                Q(sku__icontains=word) |
-                Q(brand__name_fa__icontains=word) |
-                Q(category__name_fa__icontains=word) |
-                Q(product_class__name_fa__icontains=word) |
-                Q(tags__name_fa__icontains=word)
-            )
-            
-            query |= word_query
-        
-        return {
-            'query': query & Q(store_id=store_id, status='published'),
-            'highlighted_fields': ['name_fa', 'description', 'sku']
-        }
 
-class ContentAnalyzer:
-    """Analyze content for product information extraction"""
+def generate_product_report(store, report_type: str = 'summary') -> Dict[str, Any]:
+    """
+    Generate various product reports
+    """
+    from apps.products.models import Product, ProductClass, ProductCategory, Brand
     
-    @staticmethod
-    def extract_product_info(text: str) -> Dict:
-        """Extract product information from text"""
-        if not text:
-            return {'name': '', 'price': None, 'hashtags': [], 'description': text}
-        
-        # Extract hashtags
-        hashtags = re.findall(r'#[\u0600-\u06FF\w]+', text)
-        
-        # Extract product name (first line, clean of hashtags)
-        lines = text.split('\n')
-        product_name = lines[0] if lines else ''
-        
-        # Clean product name
-        product_name = re.sub(r'#\w+', '', product_name)
-        product_name = re.sub(r'@\w+', '', product_name)
-        product_name = product_name.strip()
-        
-        # Extract price using existing utility
-        price = ProductUtils.extract_price_from_text(text)
-        
-        return {
-            'name': product_name[:100] if product_name else 'محصول جدید',
-            'price': price,
-            'hashtags': hashtags,
-            'description': text,
-            'clean_name': product_name
+    cache_key = f"product_report_{store.id}_{report_type}"
+    cached_report = cache.get(cache_key)
+    if cached_report:
+        return cached_report
+    
+    products = Product.objects.filter(store=store)
+    
+    if report_type == 'summary':
+        report = {
+            'total_products': products.count(),
+            'published_products': products.filter(status='published').count(),
+            'draft_products': products.filter(status='draft').count(),
+            'total_value': float(products.aggregate(
+                total=Sum('base_price')
+            )['total'] or 0),
+            'categories': ProductCategory.objects.filter(store=store, is_active=True).count(),
+            'product_classes': ProductClass.objects.filter(store=store, is_active=True).count(),
+            'brands': Brand.objects.filter(store=store, is_active=True).count(),
+            'featured_products': products.filter(is_featured=True).count(),
         }
     
-    @staticmethod
-    def suggest_category(content: str, store) -> Optional:
-        """Suggest category based on content analysis"""
-        from .models import ProductCategory
-        
-        content_lower = content.lower()
-        
-        # Category keywords mapping
-        category_keywords = {
-            'fashion': ['لباس', 'پوشاک', 'کفش', 'کیف', 'جواهر', 'عینک'],
-            'electronics': ['گوشی', 'لپ‌تاپ', 'کامپیوتر', 'هدفون', 'تلویزیون'],
-            'home': ['خانه', 'آشپزخانه', 'دکوراسیون', 'مبل', 'فرش'],
-            'beauty': ['آرایش', 'بهداشت', 'عطر', 'کرم', 'شامپو'],
-            'sports': ['ورزش', 'فیتنس', 'دوچرخه', 'توپ'],
-            'books': ['کتاب', 'مجله', 'نشریه'],
-            'food': ['غذا', 'خوراکی', 'نوشیدنی', 'میوه']
+    elif report_type == 'performance':
+        report = {
+            'top_viewed': list(products.filter(status='published')
+                             .order_by('-view_count')[:10]
+                             .values('name_fa', 'view_count', 'sku')),
+            'top_selling': list(products.filter(status='published')
+                              .order_by('-sales_count')[:10]
+                              .values('name_fa', 'sales_count', 'sku')),
+            'low_performers': list(products.filter(status='published', view_count__lt=10)
+                                 .order_by('view_count')[:10]
+                                 .values('name_fa', 'view_count', 'sku')),
         }
-        
-        for category_type, keywords in category_keywords.items():
-            if any(keyword in content_lower for keyword in keywords):
-                try:
-                    return ProductCategory.objects.filter(
-                        store=store,
-                        name_fa__icontains=category_type
-                    ).first()
-                except:
-                    continue
-        
-        # Return first available category as fallback
-        return ProductCategory.objects.filter(store=store, is_active=True).first()
+    
+    elif report_type == 'inventory':
+        report = validate_inventory_levels(store)
+    
+    else:
+        report = {'error': f'Unknown report type: {report_type}'}
+    
+    # Cache for 10 minutes
+    cache.set(cache_key, report, timeout=600)
+    return report
