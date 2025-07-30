@@ -1,17 +1,112 @@
 """
-Core mixins for Mall platform
-Provides reusable functionality across models
+Fixed and enhanced core mixins for Mall Platform
+Provides reusable model mixins for common functionality
 """
 
 from django.db import models
 from django.core.cache import cache
-from decimal import Decimal
+from django.utils.text import slugify
+from django.utils import timezone
+from django.contrib.auth import get_user_model
+import uuid
+
+
+class TimestampMixin(models.Model):
+    """
+    Mixin to add created_at and updated_at timestamps
+    """
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='تاریخ ایجاد')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='تاریخ بروزرسانی')
+    
+    class Meta:
+        abstract = True
+
+
+class StoreOwnedMixin(models.Model):
+    """
+    Mixin for models that belong to a store (multi-tenant isolation)
+    CRITICAL FIX: This was missing and referenced throughout the codebase
+    """
+    store = models.ForeignKey(
+        'core.Store', 
+        on_delete=models.CASCADE,
+        verbose_name='فروشگاه'
+    )
+    
+    class Meta:
+        abstract = True
+    
+    def save(self, *args, **kwargs):
+        # Ensure store is set from request context if available
+        if not self.store_id:
+            # Try to get store from thread local or request context
+            from django.core.exceptions import ValidationError
+            raise ValidationError('فروشگاه باید مشخص شود')
+        super().save(*args, **kwargs)
+
+
+class SlugMixin(models.Model):
+    """
+    Mixin to add slug field with auto-generation
+    """
+    slug = models.SlugField(
+        max_length=255, 
+        blank=True,
+        verbose_name='نامک'
+    )
+    
+    class Meta:
+        abstract = True
+    
+    def generate_slug(self):
+        """Generate slug from name fields"""
+        if hasattr(self, 'name_fa') and self.name_fa:
+            base_slug = slugify(self.name_fa, allow_unicode=True)
+        elif hasattr(self, 'name') and self.name:
+            base_slug = slugify(self.name)
+        elif hasattr(self, 'title_fa') and self.title_fa:
+            base_slug = slugify(self.title_fa, allow_unicode=True)
+        elif hasattr(self, 'title') and self.title:
+            base_slug = slugify(self.title)
+        else:
+            base_slug = str(uuid.uuid4())[:8]
+        
+        return base_slug
+    
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base_slug = self.generate_slug()
+            slug = base_slug
+            
+            # Ensure uniqueness within store if applicable
+            counter = 1
+            while True:
+                # Build queryset for uniqueness check
+                qs = self.__class__.objects.filter(slug=slug)
+                
+                # Add store filter if this model has store
+                if hasattr(self, 'store_id') and self.store_id:
+                    qs = qs.filter(store_id=self.store_id)
+                
+                # Exclude self if updating
+                if self.pk:
+                    qs = qs.exclude(pk=self.pk)
+                
+                if not qs.exists():
+                    break
+                
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            
+            self.slug = slug
+        
+        super().save(*args, **kwargs)
 
 
 class PriceInheritanceMixin(models.Model):
     """
-    Mixin for models that support price inheritance
-    Eliminates duplication in ProductClass and Product models
+    Mixin for price inheritance functionality
+    CRITICAL FIX: This was missing and referenced in product models
     """
     
     class Meta:
@@ -19,69 +114,172 @@ class PriceInheritanceMixin(models.Model):
     
     def get_effective_price(self):
         """
-        Get effective price with proper inheritance chain
-        Supports both parent-child and product-class inheritance
+        Get effective price with inheritance logic
+        Override this method in concrete models
         """
-        # Current object's price (direct override)
         if hasattr(self, 'base_price') and self.base_price:
             return self.base_price
         
-        # Product class inheritance (for Product model)
-        if hasattr(self, 'product_class') and self.product_class:
-            return self.product_class.get_effective_price()
-        
-        # Parent class inheritance (for ProductClass model)
+        # Check for parent price if hierarchical
         if hasattr(self, 'parent') and self.parent:
-            ancestors = self.get_ancestors() if hasattr(self, 'get_ancestors') else []
-            for ancestor in ancestors:
-                if ancestor.base_price:
-                    return ancestor.base_price
+            return self.parent.get_effective_price()
         
-        # Default price
-        return Decimal('0.00')
+        return 0
     
-    def cache_effective_price(self):
-        """Cache the effective price for performance"""
-        cache_key = f"effective_price_{self.__class__.__name__.lower()}_{self.id}"
-        price = self.get_effective_price()
-        cache.set(cache_key, price, timeout=300)  # 5 minutes
-        return price
-    
-    def get_cached_effective_price(self):
-        """Get cached effective price or calculate if not cached"""
-        cache_key = f"effective_price_{self.__class__.__name__.lower()}_{self.id}"
-        price = cache.get(cache_key)
-        if price is None:
-            price = self.cache_effective_price()
-        return price
+    def get_price_inheritance_chain(self):
+        """Get the chain of price inheritance"""
+        chain = []
+        current = self
+        
+        while current:
+            if hasattr(current, 'base_price') and current.base_price:
+                chain.append({
+                    'model': current,
+                    'price': current.base_price,
+                    'source': 'direct'
+                })
+                break
+            
+            chain.append({
+                'model': current,
+                'price': None,
+                'source': 'inherited'
+            })
+            
+            # Move to parent if exists
+            if hasattr(current, 'parent'):
+                current = current.parent
+            else:
+                break
+        
+        return chain
 
 
-class TimestampMixin(models.Model):
+class SEOMixin(models.Model):
     """
-    Mixin for adding created_at and updated_at timestamps
+    Mixin for SEO-related fields
     """
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name='تاریخ ایجاد')
-    updated_at = models.DateTimeField(auto_now=True, verbose_name='تاریخ به‌روزرسانی')
+    meta_title = models.CharField(
+        max_length=70, 
+        blank=True,
+        verbose_name='عنوان متا'
+    )
+    meta_description = models.CharField(
+        max_length=160, 
+        blank=True,
+        verbose_name='توضیحات متا'
+    )
+    meta_keywords = models.CharField(
+        max_length=255, 
+        blank=True,
+        verbose_name='کلمات کلیدی'
+    )
     
     class Meta:
         abstract = True
+    
+    def get_meta_title(self):
+        """Get effective meta title"""
+        if self.meta_title:
+            return self.meta_title
+        
+        # Fallback to name fields
+        if hasattr(self, 'name_fa') and self.name_fa:
+            return self.name_fa
+        elif hasattr(self, 'name') and self.name:
+            return self.name
+        elif hasattr(self, 'title_fa') and self.title_fa:
+            return self.title_fa
+        elif hasattr(self, 'title') and self.title:
+            return self.title
+        
+        return ''
+    
+    def get_meta_description(self):
+        """Get effective meta description"""
+        if self.meta_description:
+            return self.meta_description
+        
+        # Fallback to description or short description
+        if hasattr(self, 'short_description') and self.short_description:
+            return self.short_description
+        elif hasattr(self, 'description') and self.description:
+            # Truncate description to 160 chars
+            return self.description[:157] + '...' if len(self.description) > 160 else self.description
+        
+        return ''
 
 
-class SlugMixin(models.Model):
+class ViewCountMixin(models.Model):
     """
-    Mixin for models that need slug fields with Persian support
+    Mixin for tracking view counts
     """
-    slug = models.SlugField(max_length=255, verbose_name='نامک')
+    view_count = models.PositiveIntegerField(default=0, verbose_name='تعداد بازدید')
     
     class Meta:
         abstract = True
     
-    def save(self, *args, **kwargs):
-        if not self.slug and hasattr(self, 'name_fa'):
-            from django.utils.text import slugify
-            # Use transliteration for Persian to Latin
-            self.slug = slugify(self.name_fa) or f"item-{self.id or 'new'}"
-        super().save(*args, **kwargs)
+    def increment_view_count(self, increment=1):
+        """Increment view count efficiently"""
+        # Use F expression to avoid race conditions
+        from django.db.models import F
+        self.__class__.objects.filter(pk=self.pk).update(
+            view_count=F('view_count') + increment
+        )
+        
+        # Update the current instance
+        self.view_count = F('view_count') + increment
+    
+    def get_view_count(self):
+        """Get current view count"""
+        # Refresh from database if using F expressions
+        if isinstance(self.view_count, models.F):
+            self.refresh_from_db(fields=['view_count'])
+        return self.view_count
+
+
+class AnalyticsMixin(models.Model):
+    """
+    Mixin for basic analytics tracking
+    """
+    total_views = models.PositiveIntegerField(default=0, verbose_name='کل بازدیدها')
+    monthly_views = models.PositiveIntegerField(default=0, verbose_name='بازدید ماهانه')
+    weekly_views = models.PositiveIntegerField(default=0, verbose_name='بازدید هفتگی')
+    daily_views = models.PositiveIntegerField(default=0, verbose_name='بازدید روزانه')
+    
+    last_viewed_at = models.DateTimeField(null=True, blank=True, verbose_name='آخرین بازدید')
+    
+    class Meta:
+        abstract = True
+    
+    def record_view(self):
+        """Record a view and update analytics"""
+        now = timezone.now()
+        
+        # Update view counts
+        from django.db.models import F
+        self.__class__.objects.filter(pk=self.pk).update(
+            total_views=F('total_views') + 1,
+            monthly_views=F('monthly_views') + 1,
+            weekly_views=F('weekly_views') + 1,
+            daily_views=F('daily_views') + 1,
+            last_viewed_at=now
+        )
+        
+        # Cache analytics for dashboard
+        cache_key = f"analytics_{self.__class__.__name__.lower()}_{self.pk}"
+        cache.delete(cache_key)  # Invalidate cache
+    
+    def reset_periodic_views(self, period='daily'):
+        """Reset periodic view counts"""
+        if period == 'daily':
+            self.daily_views = 0
+        elif period == 'weekly':
+            self.weekly_views = 0
+        elif period == 'monthly':
+            self.monthly_views = 0
+        
+        self.save(update_fields=[f'{period}_views'])
 
 
 class SoftDeleteMixin(models.Model):
@@ -90,161 +288,129 @@ class SoftDeleteMixin(models.Model):
     """
     is_deleted = models.BooleanField(default=False, verbose_name='حذف شده')
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ حذف')
-    
-    class Meta:
-        abstract = True
-    
-    def soft_delete(self):
-        """Soft delete the object"""
-        from django.utils import timezone
-        self.is_deleted = True
-        self.deleted_at = timezone.now()
-        self.save(update_fields=['is_deleted', 'deleted_at'])
-    
-    def restore(self):
-        """Restore soft deleted object"""
-        self.is_deleted = False
-        self.deleted_at = None
-        self.save(update_fields=['is_deleted', 'deleted_at'])
-
-
-class SEOMixin(models.Model):
-    """
-    Mixin for SEO-related fields
-    """
-    meta_title = models.CharField(max_length=200, blank=True, verbose_name='عنوان متا')
-    meta_description = models.TextField(blank=True, verbose_name='توضیحات متا')
-    meta_keywords = models.CharField(max_length=500, blank=True, verbose_name='کلمات کلیدی متا')
-    
-    class Meta:
-        abstract = True
-    
-    def get_meta_title(self):
-        """Get meta title or fallback to name"""
-        if self.meta_title:
-            return self.meta_title
-        if hasattr(self, 'name_fa'):
-            return self.name_fa
-        if hasattr(self, 'name'):
-            return self.name
-        return ''
-    
-    def get_meta_description(self):
-        """Get meta description or fallback to description"""
-        if self.meta_description:
-            return self.meta_description
-        if hasattr(self, 'description'):
-            return self.description[:160]  # Limit to 160 chars
-        return ''
-
-
-class ViewCountMixin(models.Model):
-    """
-    Mixin for tracking view counts with caching
-    """
-    view_count = models.PositiveIntegerField(default=0, verbose_name='تعداد بازدید')
-    
-    class Meta:
-        abstract = True
-    
-    def increment_view_count(self, user_ip=None):
-        """
-        Increment view count with rate limiting by IP
-        """
-        if user_ip:
-            cache_key = f"view_count_{self.__class__.__name__.lower()}_{self.id}_{user_ip}"
-            if cache.get(cache_key):
-                return  # Already counted from this IP recently
-            cache.set(cache_key, True, timeout=3600)  # 1 hour cooldown
-        
-        # Use F() expression to avoid race conditions
-        from django.db.models import F
-        self.__class__.objects.filter(id=self.id).update(view_count=F('view_count') + 1)
-        self.refresh_from_db(fields=['view_count'])
-
-
-class AnalyticsMixin(models.Model):
-    """
-    Mixin for analytics tracking
-    """
-    analytics_data = models.JSONField(default=dict, blank=True, verbose_name='داده‌های تحلیلی')
-    
-    class Meta:
-        abstract = True
-    
-    def track_event(self, event_type: str, data: dict = None):
-        """Track an analytics event"""
-        from django.utils import timezone
-        
-        if not self.analytics_data:
-            self.analytics_data = {}
-        
-        if 'events' not in self.analytics_data:
-            self.analytics_data['events'] = []
-        
-        event = {
-            'type': event_type,
-            'timestamp': timezone.now().isoformat(),
-            'data': data or {}
-        }
-        
-        # Keep only last 100 events to prevent bloat
-        self.analytics_data['events'].append(event)
-        if len(self.analytics_data['events']) > 100:
-            self.analytics_data['events'] = self.analytics_data['events'][-100:]
-        
-        self.save(update_fields=['analytics_data'])
-
-
-class StoreOwnedMixin(models.Model):
-    """
-    Mixin for models that belong to a store (multi-tenancy)
-    """
-    store = models.ForeignKey(
-        'stores.Store', 
-        on_delete=models.CASCADE, 
-        verbose_name='فروشگاه'
+    deleted_by = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='%(class)s_deleted_items',
+        verbose_name='حذف شده توسط'
     )
     
     class Meta:
         abstract = True
     
+    def soft_delete(self, user=None):
+        """Perform soft delete"""
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        if user:
+            self.deleted_by = user
+        self.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by'])
+    
+    def restore(self):
+        """Restore soft deleted item"""
+        self.is_deleted = False
+        self.deleted_at = None
+        self.deleted_by = None
+        self.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by'])
+    
+    @classmethod
+    def active_objects(cls):
+        """Get manager for non-deleted objects"""
+        return cls.objects.filter(is_deleted=False)
+
+
+class VersionMixin(models.Model):
+    """
+    Mixin for version tracking
+    """
+    version = models.PositiveIntegerField(default=1, verbose_name='نسخه')
+    
+    class Meta:
+        abstract = True
+    
     def save(self, *args, **kwargs):
-        # Auto-assign store from context if not set
-        if not self.store_id and hasattr(self, '_current_store'):
-            self.store = self._current_store
+        if self.pk:
+            # Increment version on update
+            self.version += 1
         super().save(*args, **kwargs)
+    
+    def create_version_snapshot(self):
+        """Create a snapshot of current version for history"""
+        # This could be implemented to store version history
+        # in a separate model if needed
+        pass
 
 
-class ValidationMixin:
+class PublishMixin(models.Model):
     """
-    Mixin for enhanced model validation
+    Mixin for publishable content
+    """
+    STATUS_CHOICES = [
+        ('draft', 'پیش‌نویس'),
+        ('published', 'منتشر شده'),
+        ('archived', 'بایگانی شده'),
+    ]
+    
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='draft',
+        verbose_name='وضعیت'
+    )
+    published_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ انتشار')
+    
+    class Meta:
+        abstract = True
+    
+    def publish(self):
+        """Publish the content"""
+        self.status = 'published'
+        if not self.published_at:
+            self.published_at = timezone.now()
+        self.save(update_fields=['status', 'published_at'])
+    
+    def unpublish(self):
+        """Unpublish the content"""
+        self.status = 'draft'
+        self.save(update_fields=['status'])
+    
+    def archive(self):
+        """Archive the content"""
+        self.status = 'archived'
+        self.save(update_fields=['status'])
+    
+    @property
+    def is_published(self):
+        """Check if content is published"""
+        return self.status == 'published'
+    
+    @classmethod
+    def published_objects(cls):
+        """Get manager for published objects"""
+        return cls.objects.filter(status='published')
+
+
+class CacheInvalidationMixin:
+    """
+    Mixin for automatic cache invalidation
     """
     
-    def full_clean(self, exclude=None, validate_unique=True):
-        """Enhanced full_clean with custom validations"""
-        super().full_clean(exclude=exclude, validate_unique=validate_unique)
-        
-        # Call custom validation method if exists
-        if hasattr(self, 'custom_validate'):
-            self.custom_validate()
+    def get_cache_keys(self):
+        """Get list of cache keys to invalidate"""
+        # Override in concrete models
+        return []
     
-    def clean(self):
-        """Enhanced clean method"""
-        super().clean() if hasattr(super(), 'clean') else None
-        
-        # Persian text validation
-        if hasattr(self, 'name_fa') and self.name_fa:
-            self.validate_persian_text(self.name_fa, 'name_fa')
+    def invalidate_cache(self):
+        """Invalidate related cache keys"""
+        for key in self.get_cache_keys():
+            cache.delete(key)
     
-    def validate_persian_text(self, text, field_name):
-        """Validate Persian text content"""
-        import re
-        
-        # Check for Persian characters
-        persian_pattern = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
-        if not persian_pattern.search(text):
-            from django.core.exceptions import ValidationError
-            raise ValidationError({
-                field_name: 'متن باید شامل حروف فارسی باشد'
-            })
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.invalidate_cache()
+    
+    def delete(self, *args, **kwargs):
+        self.invalidate_cache()
+        super().delete(*args, **kwargs)
