@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 from django.db.models import Sum
+from apps.core.validation import ProductValidationService, SocialMediaValidationService
 from .models import (
     AttributeType, Tag, ProductClass, ProductClassAttribute,
     ProductCategory, ProductAttribute, Brand,
@@ -208,7 +209,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         return ProductClassAttributeSerializer(obj.get_inherited_attributes(), many=True).data
 
 class ProductCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating products"""
+    """Enhanced serializer for creating products with comprehensive validation"""
     attribute_values = ProductAttributeValueSerializer(many=True, required=False)
     variants_data = serializers.ListField(
         child=serializers.DictField(),
@@ -229,6 +230,23 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'attribute_values', 'variants_data', 'create_another'
         ]
     
+    def validate(self, attrs):
+        """Enhanced validation using centralized validation service"""
+        # Use centralized validation service
+        ProductValidationService.validate_product_class_hierarchy(
+            product_class_id=str(attrs['product_class'].id),
+            category_id=str(attrs['category'].id),
+            store_id=str(attrs.get('store', self.context.get('store')).id) if attrs.get('store') or self.context.get('store') else None
+        )
+        
+        # Validate price hierarchy
+        ProductValidationService.validate_price_hierarchy(
+            product_class=attrs['product_class'],
+            base_price=attrs.get('base_price')
+        )
+        
+        return attrs
+    
     def validate_product_class(self, value):
         """Validate that product class is a leaf node"""
         if not value.is_leaf:
@@ -242,7 +260,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         return value
     
     def create(self, validated_data):
-        """Create product with variants and attribute values"""
+        """Create product with enhanced validation and attribute handling"""
         attribute_values_data = validated_data.pop('attribute_values', [])
         variants_data = validated_data.pop('variants_data', [])
         create_another = validated_data.pop('create_another', False)
@@ -255,21 +273,26 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         if tags_data:
             product.tags.set(tags_data)
         
-        # Create attribute values
-        for attr_value_data in attribute_values_data:
-            ProductAttributeValue.objects.create(
-                product=product,
-                **attr_value_data
-            )
+        # Validate and create attribute values
+        if attribute_values_data:
+            ProductValidationService.validate_attribute_values(product, attribute_values_data)
+            for attr_value_data in attribute_values_data:
+                ProductAttributeValue.objects.create(
+                    product=product,
+                    **attr_value_data
+                )
         
         # Create variants if this is a variable product
         if product.product_type == 'variable' and variants_data:
             self.create_variants(product, variants_data)
         
+        # Validate stock consistency after creation
+        ProductValidationService.validate_stock_consistency(product)
+        
         return product
     
     def create_variants(self, product, variants_data):
-        """Create product variants"""
+        """Create product variants with proper validation"""
         for variant_data in variants_data:
             # Extract attribute values for this variant
             variant_attributes = variant_data.pop('attributes', {})
@@ -297,20 +320,29 @@ class ProductCreateSerializer(serializers.ModelSerializer):
                     continue
 
 class BulkProductCreateSerializer(serializers.Serializer):
-    """Serializer for bulk product creation"""
+    """Serializer for bulk product creation with enhanced validation"""
     products = ProductCreateSerializer(many=True)
     
+    def validate_products(self, value):
+        """Validate bulk product data"""
+        if len(value) > 100:  # Limit bulk operations
+            raise serializers.ValidationError("حداکثر ۱۰۰ محصول در هر بار قابل ایجاد است")
+        return value
+    
     def create(self, validated_data):
-        """Create multiple products in bulk"""
+        """Create multiple products in bulk with transaction support"""
+        from django.db import transaction
+        
         products_data = validated_data['products']
         created_products = []
         
-        for product_data in products_data:
-            # Use ProductCreateSerializer to create each product
-            serializer = ProductCreateSerializer(data=product_data)
-            serializer.is_valid(raise_exception=True)
-            product = serializer.save()
-            created_products.append(product)
+        with transaction.atomic():
+            for product_data in products_data:
+                # Use ProductCreateSerializer to create each product
+                serializer = ProductCreateSerializer(data=product_data, context=self.context)
+                serializer.is_valid(raise_exception=True)
+                product = serializer.save()
+                created_products.append(product)
         
         return created_products
 
@@ -340,16 +372,30 @@ class ProductVariantCreateSerializer(serializers.ModelSerializer):
         return variant
 
 class ProductImportSerializer(serializers.Serializer):
-    """Serializer for importing products from social media"""
+    """Enhanced serializer for importing products from social media"""
+    platform = serializers.ChoiceField(choices=[('telegram', 'تلگرام'), ('instagram', 'اینستاگرام')])
     social_media_post_id = serializers.CharField()
     product_class_id = serializers.UUIDField()
     category_id = serializers.UUIDField()
+    access_token = serializers.CharField(required=False, allow_blank=True)
     additional_data = serializers.DictField(required=False)
     
-    def validate_social_media_post_id(self, value):
-        """Validate that the social media post exists"""
-        # This would integrate with social media app when implemented
-        return value
+    def validate(self, attrs):
+        """Enhanced validation using social media validation service"""
+        # Validate social media post
+        SocialMediaValidationService.validate_social_media_post(
+            platform=attrs['platform'],
+            post_id=attrs['social_media_post_id'],
+            access_token=attrs.get('access_token')
+        )
+        
+        # Validate product class and category
+        ProductValidationService.validate_product_class_hierarchy(
+            product_class_id=str(attrs['product_class_id']),
+            category_id=str(attrs['category_id'])
+        )
+        
+        return attrs
     
     def validate_product_class_id(self, value):
         """Validate product class exists and is leaf"""
@@ -372,19 +418,26 @@ class ProductImportSerializer(serializers.Serializer):
             raise serializers.ValidationError("دسته‌بندی یافت نشد")
     
     def create(self, validated_data):
-        """Convert social media post to product"""
-        additional_data = validated_data.get('additional_data', {})
-        # Implementation would depend on social media integration
-        # For now, create a basic product
-        return Product.objects.create(
-            name=f"Product from social media",
-            name_fa=f"محصول از شبکه اجتماعی",
+        """Import product from social media using enhanced service"""
+        from apps.social_media.services import SocialMediaImportService, ProductCreationService
+        
+        # Import content from social media
+        social_content = SocialMediaImportService.import_content(
+            platform=validated_data['platform'],
+            post_id=validated_data['social_media_post_id'],
+            access_token=validated_data.get('access_token')
+        )
+        
+        # Create product from social media content
+        product = ProductCreationService.create_product_from_social_media(
+            store=self.context['store'],
             product_class=self.product_class,
             category=self.category,
-            imported_from_social=True,
-            social_media_post_id=validated_data['social_media_post_id'],
-            **additional_data
+            social_content=social_content['content'],
+            additional_data=validated_data.get('additional_data', {})
         )
+        
+        return product
 
 class CollectionSerializer(serializers.ModelSerializer):
     products_count = serializers.SerializerMethodField()
@@ -403,7 +456,7 @@ class CollectionSerializer(serializers.ModelSerializer):
         return obj.products.count()
 
 class ProductSearchSerializer(serializers.Serializer):
-    """Serializer for product search parameters"""
+    """Enhanced serializer for product search parameters"""
     query = serializers.CharField(required=False, allow_blank=True)
     product_class_id = serializers.UUIDField(required=False)
     category_id = serializers.UUIDField(required=False)
@@ -432,6 +485,14 @@ class ProductSearchSerializer(serializers.Serializer):
     
     # Attribute filters (dynamic based on category)
     attributes = serializers.DictField(required=False)
+    
+    def validate_query(self, value):
+        """Validate and clean search query"""
+        if value:
+            # Clean and normalize Persian text
+            from apps.core.validation import PersianTextValidator
+            PersianTextValidator.validate_persian_content(value, 'query')
+        return value
 
 class ProductStatisticsSerializer(serializers.Serializer):
     """Serializer for product statistics"""
