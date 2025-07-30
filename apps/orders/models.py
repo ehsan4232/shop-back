@@ -108,7 +108,7 @@ class Cart(models.Model):
         """Get price for product/variant"""
         if variant:
             return variant.price
-        return product.base_price
+        return product.get_effective_price()
     
     def apply_coupon(self, coupon_code):
         """Apply coupon code to cart"""
@@ -157,7 +157,7 @@ class CartItem(models.Model):
         verbose_name_plural = 'آیتم‌های سبد خرید'
     
     def __str__(self):
-        variant_info = f" - {self.variant.get_attribute_summary()}" if self.variant else ""
+        variant_info = f" - {self.variant}" if self.variant else ""
         return f"{self.product.name_fa}{variant_info} x {self.quantity}"
     
     @property
@@ -213,19 +213,19 @@ class Wishlist(models.Model):
         ]
     
     def __str__(self):
-        variant_info = f" - {self.variant.get_attribute_summary()}" if self.variant else ""
+        variant_info = f" - {self.variant}" if self.variant else ""
         return f"{self.customer.full_name} - {self.product.name_fa}{variant_info}"
     
     def save(self, *args, **kwargs):
         # Set price when first added
         if not self.price_when_added:
-            self.price_when_added = self.variant.price if self.variant else self.product.base_price
+            self.price_when_added = self.variant.price if self.variant else self.product.get_effective_price()
         super().save(*args, **kwargs)
     
     @property
     def current_price(self):
         """Get current price of the item"""
-        return self.variant.price if self.variant else self.product.base_price
+        return self.variant.price if self.variant else self.product.get_effective_price()
     
     @property
     def price_difference(self):
@@ -251,7 +251,7 @@ class Wishlist(models.Model):
         
         # Get or create cart
         cart, created = Cart.objects.get_or_create(
-            customer=self.customer,
+            user=self.customer,
             store=self.store
         )
         
@@ -499,7 +499,7 @@ class OrderItem(models.Model):
         verbose_name_plural = 'آیتم‌های سفارش'
     
     def __str__(self):
-        variant_info = f" - {self.variant.get_attribute_summary()}" if self.variant else ""
+        variant_info = f" - {self.variant}" if self.variant else ""
         return f"{self.product_name}{variant_info} x {self.quantity}"
     
     def save(self, *args, **kwargs):
