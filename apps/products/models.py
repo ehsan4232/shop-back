@@ -12,7 +12,6 @@ import uuid
 class AttributeType(TimestampMixin, SlugMixin):
     """
     Attribute types for product attributes
-    FIXED: Added UUID primary key and performance indexes
     """
     TYPE_CHOICES = [
         ('text', 'متن'),
@@ -24,7 +23,6 @@ class AttributeType(TimestampMixin, SlugMixin):
         ('date', 'تاریخ'),
     ]
     
-    # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     name = models.CharField(max_length=50, unique=True, verbose_name='نام انگلیسی')
@@ -38,7 +36,6 @@ class AttributeType(TimestampMixin, SlugMixin):
         verbose_name = 'نوع ویژگی'
         verbose_name_plural = 'انواع ویژگی'
         ordering = ['display_order', 'name_fa']
-        # FIX: Add critical performance indexes
         indexes = [
             models.Index(fields=['data_type']),
             models.Index(fields=['is_required']),
@@ -54,7 +51,6 @@ class AttributeType(TimestampMixin, SlugMixin):
 class Tag(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     """
     Product tags with usage tracking
-    FIXED: Added UUID primary key and enhanced indexes
     """
     TAG_TYPES = [
         ('general', 'عمومی'),
@@ -64,7 +60,6 @@ class Tag(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
         ('season', 'فصلی'),
     ]
     
-    # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     name = models.CharField(max_length=50, verbose_name='نام')
@@ -81,7 +76,6 @@ class Tag(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
         verbose_name = 'برچسب'
         verbose_name_plural = 'برچسب‌ها'
         ordering = ['-usage_count', 'name_fa']
-        # FIX: Enhanced indexes for query performance
         indexes = [
             models.Index(fields=['store', 'tag_type']),
             models.Index(fields=['is_featured', 'is_filterable']),
@@ -98,7 +92,6 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
     """
     Object-oriented product class hierarchy with inheritance
     Implements the core OOP requirement with unlimited depth
-    FIXED: Enhanced MPTT performance and price inheritance logic
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
@@ -143,7 +136,6 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
         verbose_name = 'کلاس محصول'
         verbose_name_plural = 'کلاس‌های محصول'
         unique_together = ['store', 'slug']
-        # FIX: Critical MPTT performance indexes
         indexes = [
             models.Index(fields=['store', 'is_active']),
             models.Index(fields=['parent', 'display_order']),
@@ -152,15 +144,14 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
             models.Index(fields=['tree_id']),
             models.Index(fields=['level']),
             models.Index(fields=['slug']),
-            models.Index(fields=['base_price']),  # For price inheritance queries
+            models.Index(fields=['base_price']),
         ]
     
     def __str__(self):
         return self.name_fa or self.name
     
-    # FIX: Improved price inheritance without circular dependencies
     def get_effective_price(self):
-        """Get effective price with optimized inheritance chain"""
+        """Get effective price with inheritance and caching"""
         cache_key = f"effective_price_class_{self.id}"
         cached_price = cache.get(cache_key)
         if cached_price is not None:
@@ -189,7 +180,7 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
         # Clear price cache
         cache.delete(f"effective_price_class_{self.id}")
         
-        # FIX: Update parent's is_leaf status efficiently
+        # Update parent's is_leaf status efficiently
         if self.parent and self.parent.is_leaf:
             self.parent.is_leaf = False
             self.parent.save(update_fields=['is_leaf'])
@@ -224,9 +215,7 @@ class ProductClass(MPTTModel, StoreOwnedMixin, PriceInheritanceMixin, TimestampM
 class ProductClassAttribute(TimestampMixin):
     """
     Attributes defined at class level that are inherited by child classes
-    FIXED: Added UUID and performance indexes
     """
-    # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     product_class = models.ForeignKey(ProductClass, on_delete=models.CASCADE, related_name='attributes')
@@ -241,7 +230,6 @@ class ProductClassAttribute(TimestampMixin):
         verbose_name = 'ویژگی کلاس محصول'
         verbose_name_plural = 'ویژگی‌های کلاس محصول'
         ordering = ['display_order', 'attribute_type__name_fa']
-        # FIX: Add performance indexes
         indexes = [
             models.Index(fields=['product_class', 'attribute_type']),
             models.Index(fields=['is_required']),
@@ -255,7 +243,6 @@ class ProductClassAttribute(TimestampMixin):
 class ProductCategory(MPTTModel, StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     """
     Product categories with hierarchical structure
-    FIXED: Enhanced MPTT indexes for performance
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
@@ -290,11 +277,10 @@ class ProductCategory(MPTTModel, StoreOwnedMixin, TimestampMixin, SlugMixin, Ana
         verbose_name = 'دسته‌بندی محصول'
         verbose_name_plural = 'دسته‌بندی‌های محصول'
         unique_together = ['store', 'slug']
-        # FIX: Enhanced MPTT indexes for better tree operations
         indexes = [
             models.Index(fields=['store', 'is_active']),
             models.Index(fields=['parent', 'display_order']),
-            models.Index(fields=['lft', 'rght']),  # MPTT indexes
+            models.Index(fields=['lft', 'rght']),
             models.Index(fields=['tree_id']),
             models.Index(fields=['level']),
             models.Index(fields=['slug']),
@@ -331,7 +317,6 @@ class Brand(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
         ordering = ['name_fa']
         verbose_name = 'برند'
         verbose_name_plural = 'برندها'
-        # FIX: Add performance indexes
         indexes = [
             models.Index(fields=['store', 'is_active']),
             models.Index(fields=['name']),
@@ -352,9 +337,7 @@ class Brand(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
 class ProductAttribute(TimestampMixin):
     """
     Category-level product attributes that can be applied to products
-    FIXED: Added UUID and performance indexes
     """
-    # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     category = models.ForeignKey(ProductCategory, on_delete=models.CASCADE, related_name='attributes')
@@ -368,7 +351,6 @@ class ProductAttribute(TimestampMixin):
         verbose_name = 'ویژگی محصول'
         verbose_name_plural = 'ویژگی‌های محصول'
         ordering = ['display_order', 'attribute_type__name_fa']
-        # FIX: Add performance indexes
         indexes = [
             models.Index(fields=['category', 'attribute_type']),
             models.Index(fields=['is_required']),
@@ -381,7 +363,6 @@ class ProductAttribute(TimestampMixin):
 class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin, SEOMixin, ViewCountMixin, AnalyticsMixin):
     """
     Enhanced product model with object-oriented class support and comprehensive features
-    FIXED: Optimized price inheritance and query performance
     """
     STATUS_CHOICES = [
         ('draft', 'پیش‌نویس'),
@@ -475,7 +456,6 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
         ordering = ['-created_at']
         verbose_name = 'محصول'
         verbose_name_plural = 'محصولات'
-        # FIX: Critical performance indexes for product queries
         indexes = [
             models.Index(fields=['store', 'status', '-created_at']),
             models.Index(fields=['product_class', 'status']),
@@ -487,16 +467,15 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
             models.Index(fields=['-view_count']),
             models.Index(fields=['-sales_count']),
             models.Index(fields=['-rating_average']),
-            models.Index(fields=['stock_quantity']),  # For inventory queries
-            models.Index(fields=['published_at']),    # For date filtering
+            models.Index(fields=['stock_quantity']),
+            models.Index(fields=['published_at']),
         ]
     
     def __str__(self):
         return self.name_fa or self.name
     
-    # FIX: Optimized price inheritance with caching
     def get_effective_price(self):
-        """Get effective price with inheritance and caching"""
+        """Get effective price with inheritance"""
         if self.base_price:
             return self.base_price
         
@@ -561,9 +540,7 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
 class ProductAttributeValue(TimestampMixin):
     """
     Attribute values for products and variants with multi-type support
-    FIXED: Added UUID and performance indexes
     """
-    # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     product = models.ForeignKey(Product, on_delete=models.CASCADE, null=True, blank=True, related_name='attribute_values')
@@ -583,7 +560,6 @@ class ProductAttributeValue(TimestampMixin):
             ['product', 'attribute'],
             ['variant', 'attribute']
         ]
-        # FIX: Add performance indexes for filtering
         indexes = [
             models.Index(fields=['product', 'attribute']),
             models.Index(fields=['variant', 'attribute']),
@@ -620,7 +596,6 @@ class ProductAttributeValue(TimestampMixin):
 class ProductVariant(PriceInheritanceMixin, TimestampMixin, AnalyticsMixin):
     """
     Product variants for different attribute combinations
-    FIXED: Enhanced performance and indexing
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='variants')
@@ -646,7 +621,6 @@ class ProductVariant(PriceInheritanceMixin, TimestampMixin, AnalyticsMixin):
         ordering = ['price']
         verbose_name = 'نوع محصول'
         verbose_name_plural = 'انواع محصول'
-        # FIX: Add performance indexes
         indexes = [
             models.Index(fields=['product', 'is_active']),
             models.Index(fields=['sku']),
@@ -683,7 +657,6 @@ class ProductVariant(PriceInheritanceMixin, TimestampMixin, AnalyticsMixin):
 
 class ProductImage(TimestampMixin):
     """Product images with social media import tracking"""
-    # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
@@ -702,7 +675,6 @@ class ProductImage(TimestampMixin):
         ordering = ['display_order', 'created_at']
         verbose_name = 'تصویر محصول'
         verbose_name_plural = 'تصاویر محصول'
-        # FIX: Add performance indexes
         indexes = [
             models.Index(fields=['product', 'display_order']),
             models.Index(fields=['variant', 'display_order']),
@@ -717,7 +689,6 @@ class ProductImage(TimestampMixin):
 
 class Collection(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     """Product collections for marketing"""
-    # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     name = models.CharField(max_length=100, verbose_name='نام مجموعه')
@@ -738,7 +709,6 @@ class Collection(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
         ordering = ['display_order', 'name_fa']
         verbose_name = 'مجموعه محصولات'
         verbose_name_plural = 'مجموعه‌های محصولات'
-        # FIX: Add performance indexes
         indexes = [
             models.Index(fields=['store', 'is_active']),
             models.Index(fields=['is_featured']),
@@ -749,7 +719,7 @@ class Collection(StoreOwnedMixin, TimestampMixin, SlugMixin, AnalyticsMixin):
     def __str__(self):
         return self.name_fa or self.name
 
-# FIX: Enhanced signal handlers for maintaining data consistency
+# Signal handlers for maintaining data consistency
 from django.db.models.signals import post_save, pre_delete, m2m_changed
 from django.dispatch import receiver
 
@@ -803,7 +773,7 @@ def update_parent_leaf_status_on_delete(sender, instance, **kwargs):
         # Clear cache
         cache.delete(f"effective_price_class_{instance.parent.id}")
 
-# FIX: Clear price inheritance cache when ProductClass price changes
+# Clear price inheritance cache when ProductClass price changes
 @receiver(post_save, sender=ProductClass)
 def clear_price_cache(sender, instance, **kwargs):
     """Clear price cache when ProductClass price changes"""
