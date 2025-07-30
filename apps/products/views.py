@@ -3,27 +3,30 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters import rest_framework as django_filters
-from django.db.models import Q, Count, Min, Max, Avg, F
+from django.db.models import Q, Count, Min, Max, Avg, F, Sum
 from django.core.cache import cache
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django.shortcuts import get_object_or_404
 from .models import (
-    ProductCategory, AttributeType, ProductAttribute, Brand, Tag,
+    AttributeType, Tag, ProductClass, ProductClassAttribute,
+    ProductCategory, ProductAttribute, Brand,
     Product, ProductVariant, ProductAttributeValue, ProductImage, Collection
 )
 from .serializers import (
-    ProductCategorySerializer, AttributeTypeSerializer, ProductAttributeSerializer,
-    BrandSerializer, TagSerializer, ProductListSerializer, ProductDetailSerializer,
-    ProductCreateSerializer, BulkProductCreateSerializer, ProductVariantSerializer,
+    AttributeTypeSerializer, TagSerializer, ProductClassSerializer,
+    ProductCategorySerializer, ProductAttributeSerializer, BrandSerializer,
+    ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
+    BulkProductCreateSerializer, ProductVariantSerializer,
     ProductVariantCreateSerializer, ProductImportSerializer, CollectionSerializer,
     ProductSearchSerializer, ProductStatisticsSerializer
 )
 
 class ProductFilter(django_filters.FilterSet):
     """Advanced product filtering"""
-    min_price = django_filters.NumberFilter(field_name="base_price", lookup_expr='gte')
-    max_price = django_filters.NumberFilter(field_name="base_price", lookup_expr='lte')
+    min_price = django_filters.NumberFilter(method='filter_min_price')
+    max_price = django_filters.NumberFilter(method='filter_max_price')
+    product_class = django_filters.CharFilter(method='filter_product_class')
     category = django_filters.CharFilter(method='filter_category')
     brand = django_filters.CharFilter(field_name="brand__slug")
     tags = django_filters.CharFilter(method='filter_tags')
@@ -32,6 +35,29 @@ class ProductFilter(django_filters.FilterSet):
     class Meta:
         model = Product
         fields = ['status', 'product_type', 'is_featured']
+    
+    def filter_min_price(self, queryset, name, value):
+        """Filter by minimum effective price"""
+        return queryset.filter(
+            Q(base_price__gte=value) |
+            Q(base_price__isnull=True, product_class__base_price__gte=value)
+        )
+    
+    def filter_max_price(self, queryset, name, value):
+        """Filter by maximum effective price"""
+        return queryset.filter(
+            Q(base_price__lte=value) |
+            Q(base_price__isnull=True, product_class__base_price__lte=value)
+        )
+    
+    def filter_product_class(self, queryset, name, value):
+        """Filter by product class including descendants"""
+        try:
+            product_class = ProductClass.objects.get(slug=value)
+            descendant_ids = [product_class.id] + list(product_class.get_descendants().values_list('id', flat=True))
+            return queryset.filter(product_class_id__in=descendant_ids)
+        except ProductClass.DoesNotExist:
+            return queryset.none()
     
     def filter_category(self, queryset, name, value):
         """Filter by category including descendants"""
@@ -55,6 +81,75 @@ class ProductFilter(django_filters.FilterSet):
                 Q(product_type='variable', variants__stock_quantity__gt=0)
             ).distinct()
         return queryset
+
+class AttributeTypeViewSet(viewsets.ModelViewSet):
+    """Attribute type management ViewSet"""
+    serializer_class = AttributeTypeSerializer
+    permission_classes = [AllowAny]
+    lookup_field = 'slug'
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name_fa', 'name']
+    ordering_fields = ['display_order', 'name_fa', 'created_at']
+    ordering = ['display_order', 'name_fa']
+    
+    def get_queryset(self):
+        return AttributeType.objects.all()
+
+class TagViewSet(viewsets.ModelViewSet):
+    """Tag management ViewSet"""
+    serializer_class = TagSerializer
+    permission_classes = [AllowAny]
+    lookup_field = 'slug'
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['usage_count', 'name_fa']
+    ordering = ['-usage_count', 'name_fa']
+    
+    def get_queryset(self):
+        store_id = self.request.query_params.get('store')
+        queryset = Tag.objects.all()
+        if store_id:
+            queryset = queryset.filter(store_id=store_id)
+        
+        tag_type = self.request.query_params.get('type')
+        if tag_type:
+            queryset = queryset.filter(tag_type=tag_type)
+        
+        featured_only = self.request.query_params.get('featured')
+        if featured_only == 'true':
+            queryset = queryset.filter(is_featured=True)
+        
+        return queryset
+
+class ProductClassViewSet(viewsets.ModelViewSet):
+    """Product class hierarchy management ViewSet"""
+    serializer_class = ProductClassSerializer
+    permission_classes = [AllowAny]
+    lookup_field = 'slug'
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name_fa', 'name']
+    ordering_fields = ['display_order', 'name_fa', 'created_at']
+    ordering = ['display_order', 'name_fa']
+    
+    def get_queryset(self):
+        store_id = self.request.query_params.get('store')
+        queryset = ProductClass.objects.filter(is_active=True)
+        if store_id:
+            queryset = queryset.filter(store_id=store_id)
+        
+        # Filter by parent
+        parent_id = self.request.query_params.get('parent')
+        if parent_id:
+            if parent_id == 'null':
+                queryset = queryset.filter(parent__isnull=True)
+            else:
+                queryset = queryset.filter(parent_id=parent_id)
+        
+        # Filter by leaf status
+        leaf_only = self.request.query_params.get('leaf_only')
+        if leaf_only == 'true':
+            queryset = queryset.filter(is_leaf=True)
+        
+        return queryset.prefetch_related('children', 'attributes__attribute_type')
 
 class CategoryViewSet(viewsets.ModelViewSet):
     """Category management ViewSet"""
@@ -99,31 +194,6 @@ class BrandViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(store_id=store_id)
         return queryset
 
-class TagViewSet(viewsets.ModelViewSet):
-    """Tag management ViewSet"""
-    serializer_class = TagSerializer
-    permission_classes = [AllowAny]
-    lookup_field = 'slug'
-    filter_backends = [filters.OrderingFilter]
-    ordering_fields = ['usage_count', 'name_fa']
-    ordering = ['-usage_count', 'name_fa']
-    
-    def get_queryset(self):
-        store_id = self.request.query_params.get('store')
-        queryset = Tag.objects.all()
-        if store_id:
-            queryset = queryset.filter(store_id=store_id)
-        
-        tag_type = self.request.query_params.get('type')
-        if tag_type:
-            queryset = queryset.filter(tag_type=tag_type)
-        
-        featured_only = self.request.query_params.get('featured')
-        if featured_only == 'true':
-            queryset = queryset.filter(is_featured=True)
-        
-        return queryset
-
 class ProductViewSet(viewsets.ModelViewSet):
     """Product management ViewSet"""
     permission_classes = [AllowAny]
@@ -136,7 +206,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     ]
     search_fields = ['name_fa', 'name', 'description', 'brand__name_fa', 'sku']
     ordering_fields = [
-        'created_at', 'base_price', 'view_count', 'sales_count', 'rating_average'
+        'created_at', 'view_count', 'sales_count', 'rating_average'
     ]
     ordering = ['-created_at']
     
@@ -171,7 +241,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     attribute_values__value_text=value
                 )
         
-        return queryset.select_related('brand', 'category').prefetch_related(
+        return queryset.select_related('brand', 'category', 'product_class').prefetch_related(
             'tags', 'images', 'variants'
         ).distinct()
     
@@ -217,7 +287,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             # Create variant
             variant = ProductVariant.objects.create(
                 product=product,
-                price=product.base_price,
+                price=product.get_effective_price(),
                 stock_quantity=0
             )
             
@@ -260,7 +330,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 Q(description__icontains=query) |
                 Q(brand__name_fa__icontains=query) |
                 Q(sku__icontains=query) |
-                Q(tags__name_fa__icontains=query)
+                Q(tags__name_fa__icontains=query) |
+                Q(product_class__name_fa__icontains=query)
             ).distinct()[:limit]
             
             return Response({
@@ -280,13 +351,18 @@ class ProductViewSet(viewsets.ModelViewSet):
             store=product.store
         ).exclude(id=product.id)
         
+        # Same product class
+        same_class = recommendations.filter(product_class=product.product_class)[:4]
+        
         # Same category
-        same_category = recommendations.filter(category=product.category)[:4]
+        same_category = recommendations.filter(category=product.category).exclude(
+            id__in=[p.id for p in same_class]
+        )[:4]
         
         # Same brand
         if product.brand:
             same_brand = recommendations.filter(brand=product.brand).exclude(
-                id__in=[p.id for p in same_category]
+                id__in=[p.id for p in same_class] + [p.id for p in same_category]
             )[:2]
         else:
             same_brand = []
@@ -296,12 +372,12 @@ class ProductViewSet(viewsets.ModelViewSet):
             similar_tags = recommendations.filter(
                 tags__in=product.tags.all()
             ).exclude(
-                id__in=[p.id for p in same_category] + [p.id for p in same_brand]
+                id__in=[p.id for p in same_class] + [p.id for p in same_category] + [p.id for p in same_brand]
             ).distinct()[:2]
         else:
             similar_tags = []
         
-        all_recommendations = list(same_category) + list(same_brand) + list(similar_tags)
+        all_recommendations = list(same_class) + list(same_category) + list(same_brand) + list(similar_tags)
         
         return Response(ProductListSerializer(all_recommendations[:8], many=True).data)
 
@@ -345,15 +421,35 @@ def category_filters(request, slug):
     filters_data = {}
     
     # Price range
-    price_range = products.aggregate(
+    price_aggregation = products.aggregate(
         min_price=Min('base_price'),
         max_price=Max('base_price')
     )
     filters_data['price'] = {
         'name': 'قیمت',
         'type': 'range',
-        'min_value': price_range['min_price'] or 0,
-        'max_value': price_range['max_price'] or 0
+        'min_value': price_aggregation['min_price'] or 0,
+        'max_value': price_aggregation['max_price'] or 0
+    }
+    
+    # Product Classes
+    product_classes = ProductClass.objects.filter(
+        products__in=products,
+        is_active=True
+    ).annotate(
+        product_count=Count('products')
+    ).order_by('-product_count')
+    
+    filters_data['product_classes'] = {
+        'name': 'کلاس محصول',
+        'type': 'choice',
+        'choices': [
+            {
+                'value': pc.slug,
+                'label': pc.name_fa,
+                'count': pc.product_count
+            } for pc in product_classes
+        ]
     }
     
     # Brands
@@ -398,8 +494,7 @@ def category_filters(request, slug):
     
     # Dynamic attributes
     attributes = ProductAttribute.objects.filter(
-        category__in=category.get_descendants(include_self=True),
-        attribute_type__is_filterable=True
+        category__in=category.get_descendants(include_self=True)
     ).select_related('attribute_type')
     
     for attr in attributes:
@@ -435,6 +530,7 @@ def store_statistics(request):
     
     stats = {
         'total_products': Product.objects.filter(store=store, status='published').count(),
+        'total_product_classes': ProductClass.objects.filter(store=store, is_active=True).count(),
         'total_categories': ProductCategory.objects.filter(store=store, is_active=True).count(),
         'total_brands': Brand.objects.filter(store=store, is_active=True).count(),
         'featured_products': Product.objects.filter(store=store, status='published', is_featured=True).count(),
@@ -496,6 +592,7 @@ def product_analytics(request):
         ).count(),
         'featured_products': products.filter(is_featured=True).count(),
         'total_variants': ProductVariant.objects.filter(product__store=store).count(),
+        'total_product_classes': ProductClass.objects.filter(store=store, is_active=True).count(),
         'total_categories': ProductCategory.objects.filter(store=store, is_active=True).count(),
         'total_brands': Brand.objects.filter(store=store, is_active=True).count(),
         'avg_price': products.filter(status='published').aggregate(
@@ -522,3 +619,27 @@ def trending_searches(request):
         {'term': 'تبلت', 'count': 60},
     ]
     return Response({'trending': trending})
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def product_class_hierarchy(request):
+    """Get product class hierarchy for a store"""
+    store_id = request.GET.get('store')
+    if not store_id:
+        return Response({'error': 'شناسه فروشگاه الزامی است'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        from apps.stores.models import Store
+        store = Store.objects.get(id=store_id)
+    except Store.DoesNotExist:
+        return Response({'error': 'فروشگاه یافت نشد'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Get root classes (no parent)
+    root_classes = ProductClass.objects.filter(
+        store=store,
+        is_active=True,
+        parent__isnull=True
+    ).order_by('display_order', 'name_fa')
+    
+    serializer = ProductClassSerializer(root_classes, many=True, context={'request': request})
+    return Response(serializer.data)
