@@ -2,297 +2,246 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
-from django.db.models import Count, Q
 from mptt.admin import MPTTModelAdmin
-from .models import *
+from .models import (
+    AttributeType, Tag, ProductClass, ProductClassAttribute,
+    ProductCategory, ProductAttribute, Brand,
+    Product, ProductVariant, ProductAttributeValue, ProductImage, Collection
+)
 
 @admin.register(AttributeType)
 class AttributeTypeAdmin(admin.ModelAdmin):
-    """User-friendly attribute type management"""
-    
-    list_display = ['name_fa', 'display_type', 'filter_type', 'is_filterable', 'is_variant_creating', 'unit']
-    list_filter = ['display_type', 'filter_type', 'is_filterable', 'is_variant_creating']
+    list_display = ['name_fa', 'name', 'data_type', 'is_required', 'is_filterable', 'display_order']
+    list_filter = ['data_type', 'is_required', 'is_filterable']
     search_fields = ['name_fa', 'name']
-    
-    fieldsets = (
-        ('اطلاعات اصلی', {
-            'fields': ('name', 'name_fa', 'display_type', 'filter_type'),
-            'description': 'اطلاعات اساسی نوع ویژگی'
-        }),
-        ('تنظیمات پیشرفته', {
-            'fields': ('unit', 'predefined_choices', 'icon', 'help_text'),
-            'classes': ('collapse',),
-            'description': 'تنظیمات اضافی برای ویژگی'
-        }),
-        ('رفتار سیستم', {
-            'fields': ('is_filterable', 'is_searchable', 'show_in_listing', 'is_variant_creating'),
-            'description': 'نحوه نمایش و کارکرد ویژگی در سیستم'
-        })
-    )
-
-class ProductAttributeInline(admin.TabularInline):
-    """Inline for category attributes"""
-    model = ProductAttribute
-    extra = 0
-    fields = ['attribute_type', 'is_required', 'display_order', 'is_inherited']
-    readonly_fields = ['is_inherited']
-
-@admin.register(ProductCategory)
-class ProductCategoryAdmin(MPTTModelAdmin):
-    """Hierarchical category management with inheritance support"""
-    
-    list_display = [
-        'name_fa', 'parent', 'category_type', 'product_count_display', 
-        'show_in_menu', 'is_active', 'display_order'
-    ]
-    list_filter = ['category_type', 'is_active', 'show_in_menu', 'parent']
-    search_fields = ['name_fa', 'name', 'description']
+    ordering = ['display_order', 'name_fa']
     prepopulated_fields = {'slug': ('name',)}
-    
-    fieldsets = (
-        ('اطلاعات اصلی', {
-            'fields': ('name', 'name_fa', 'slug', 'parent', 'category_type', 'description')
-        }),
-        ('نمایش و ظاهر', {
-            'fields': ('icon', 'banner_image', 'display_order', 'show_in_menu', 'is_active'),
-            'classes': ('collapse',)
-        }),
-        ('سئو', {
-            'fields': ('meta_title', 'meta_description'),
-            'classes': ('collapse',)
-        }),
-    )
-    
-    inlines = [ProductAttributeInline]
-    
-    def product_count_display(self, obj):
-        """Show product count with link to products"""
-        count = obj.product_count_cache
-        if count > 0:
-            url = reverse('admin:products_product_changelist') + f'?category__id__exact={obj.id}'
-            return format_html('<a href="{}" title="مشاهده محصولات">{} محصول</a>', url, count)
-        return '0 محصول'
-    product_count_display.short_description = 'تعداد محصولات'
-
-@admin.register(Brand)
-class BrandAdmin(admin.ModelAdmin):
-    """Brand management with product tracking"""
-    
-    list_display = [
-        'name_fa', 'logo_preview', 'product_count_display', 
-        'country_of_origin', 'is_featured', 'is_active'
-    ]
-    list_filter = ['is_featured', 'is_active', 'country_of_origin']
-    search_fields = ['name_fa', 'name', 'description']
-    prepopulated_fields = {'slug': ('name',)}
-    
-    fieldsets = (
-        ('اطلاعات اصلی', {
-            'fields': ('name', 'name_fa', 'slug', 'logo', 'description')
-        }),
-        ('جزئیات برند', {
-            'fields': ('website', 'country_of_origin'),
-            'classes': ('collapse',)
-        }),
-        ('تنظیمات نمایش', {
-            'fields': ('is_featured', 'is_active', 'display_order')
-        }),
-    )
-    
-    def logo_preview(self, obj):
-        if obj.logo:
-            return format_html(
-                '<img src="{}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;" />',
-                obj.logo.url
-            )
-        return format_html('<div style="width: 50px; height: 50px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 12px;">بدون لوگو</div>')
-    logo_preview.short_description = 'لوگو'
-    
-    def product_count_display(self, obj):
-        count = obj.product_count
-        if count > 0:
-            url = reverse('admin:products_product_changelist') + f'?brand__id__exact={obj.id}'
-            return format_html('<a href="{}" title="مشاهده محصولات">{} محصول</a>', url, count)
-        return '0 محصول'
-    product_count_display.short_description = 'محصولات'
 
 @admin.register(Tag)
 class TagAdmin(admin.ModelAdmin):
-    """Tag management with usage statistics"""
-    
-    list_display = ['name_fa', 'tag_type', 'color_preview', 'usage_count', 'is_featured', 'is_filterable']
-    list_filter = ['tag_type', 'is_featured', 'is_filterable']
+    list_display = ['name_fa', 'tag_type', 'store', 'usage_count', 'is_featured', 'is_filterable']
+    list_filter = ['tag_type', 'is_featured', 'is_filterable', 'store']
     search_fields = ['name_fa', 'name']
+    ordering = ['-usage_count', 'name_fa']
     prepopulated_fields = {'slug': ('name',)}
-    
-    def color_preview(self, obj):
-        return format_html(
-            '<div style="width: 30px; height: 20px; background-color: {}; border: 1px solid #ddd; border-radius: 3px; display: inline-block;"></div>',
-            obj.color
-        )
-    color_preview.short_description = 'رنگ'
+    readonly_fields = ['usage_count']
 
-class ProductAttributeValueInline(admin.TabularInline):
-    """Inline for product attribute values"""
-    model = ProductAttributeValue
+class ProductClassAttributeInline(admin.TabularInline):
+    model = ProductClassAttribute
     extra = 0
-    fields = ['attribute', 'display_value_readonly', 'value_text', 'value_number', 'color_hex']
-    readonly_fields = ['display_value_readonly']
-    
-    def display_value_readonly(self, obj):
-        return obj.display_value if obj else ''
-    display_value_readonly.short_description = 'مقدار نمایشی'
+    autocomplete_fields = ['attribute_type']
 
-class ProductVariantInline(admin.TabularInline):
-    """Inline for product variants"""
-    model = ProductVariant
-    extra = 0
-    fields = [
-        'sku', 'price', 'stock_quantity', 'weight', 
-        'is_active', 'is_default', 'variant_summary'
-    ]
-    readonly_fields = ['variant_summary']
+@admin.register(ProductClass)
+class ProductClassAdmin(MPTTModelAdmin):
+    list_display = ['name_fa', 'store', 'parent', 'base_price', 'is_leaf', 'product_count', 'is_active']
+    list_filter = ['store', 'is_active', 'is_leaf']
+    search_fields = ['name_fa', 'name']
+    ordering = ['tree_id', 'lft']
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ['is_leaf', 'product_count']
+    inlines = [ProductClassAttributeInline]
     
-    def variant_summary(self, obj):
-        if obj and obj.id:
-            return obj.get_attribute_summary()
-        return 'جدید'
-    variant_summary.short_description = 'ویژگی‌ها'
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('parent', 'store')
+
+class ProductAttributeInline(admin.TabularInline):
+    model = ProductAttribute
+    extra = 0
+    autocomplete_fields = ['attribute_type']
+
+@admin.register(ProductCategory)
+class ProductCategoryAdmin(MPTTModelAdmin):
+    list_display = ['name_fa', 'store', 'parent', 'product_count', 'is_active']
+    list_filter = ['store', 'is_active']
+    search_fields = ['name_fa', 'name']
+    ordering = ['tree_id', 'lft']
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ['product_count']
+    inlines = [ProductAttributeInline]
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('parent', 'store')
+
+@admin.register(Brand)
+class BrandAdmin(admin.ModelAdmin):
+    list_display = ['name_fa', 'store', 'product_count', 'is_active']
+    list_filter = ['store', 'is_active']
+    search_fields = ['name_fa', 'name']
+    ordering = ['name_fa']
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ['product_count']
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('store')
 
 class ProductImageInline(admin.TabularInline):
-    """Inline for product images"""
     model = ProductImage
-    extra = 1
-    fields = ['image', 'image_preview', 'alt_text', 'is_featured', 'display_order']
+    extra = 0
     readonly_fields = ['image_preview']
     
     def image_preview(self, obj):
-        if obj and obj.image:
-            return format_html(
-                '<img src="{}" style="width: 100px; height: 100px; object-fit: cover;" />',
-                obj.image.url
-            )
-        return 'بدون تصویر'
-    image_preview.short_description = 'پیش‌نمایش'
+        if obj.image:
+            return format_html('<img src="{}" style="max-height: 100px;"/>', obj.image.url)
+        return "No Image"
+    image_preview.short_description = "Preview"
+
+class ProductVariantInline(admin.TabularInline):
+    model = ProductVariant
+    extra = 0
+    readonly_fields = ['in_stock', 'discount_percentage']
+    
+    def in_stock(self, obj):
+        return obj.in_stock
+    in_stock.boolean = True
+    
+    def discount_percentage(self, obj):
+        return f"{obj.discount_percentage}%"
+
+class ProductAttributeValueInline(admin.TabularInline):
+    model = ProductAttributeValue
+    extra = 0
+    autocomplete_fields = ['attribute']
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    """Comprehensive product management with variant support"""
-    
     list_display = [
-        'name_fa', 'category', 'brand', 'product_type', 
-        'price_display', 'stock_status', 'status', 'is_featured'
+        'name_fa', 'store', 'product_class', 'category', 'brand', 
+        'effective_price', 'stock_quantity', 'status', 'is_featured',
+        'view_count', 'sales_count', 'created_at'
     ]
     list_filter = [
-        'status', 'product_type', 'is_featured', 'category', 'brand',
-        ('created_at', admin.DateFieldListFilter),
-        'tags'
+        'store', 'product_class', 'category', 'brand', 'status', 
+        'product_type', 'is_featured', 'imported_from_social'
     ]
     search_fields = ['name_fa', 'name', 'sku', 'description']
+    ordering = ['-created_at']
     prepopulated_fields = {'slug': ('name',)}
-    filter_horizontal = ['tags', 'related_products']
+    readonly_fields = [
+        'effective_price', 'in_stock', 'discount_percentage', 'is_low_stock',
+        'view_count', 'sales_count', 'created_at', 'updated_at', 'published_at'
+    ]
+    autocomplete_fields = ['product_class', 'category', 'brand', 'tags']
+    filter_horizontal = ['tags']
+    inlines = [ProductAttributeValueInline, ProductImageInline, ProductVariantInline]
     
     fieldsets = (
-        ('اطلاعات اصلی', {
+        ('اطلاعات پایه', {
             'fields': (
-                'name', 'name_fa', 'slug', 'category', 'brand',
-                'product_type', 'description', 'short_description'
+                'name', 'name_fa', 'slug', 'description', 'short_description',
+                'product_class', 'category', 'brand', 'tags'
             )
         }),
-        ('قیمت و موجودی', {
-            'fields': ('base_price', 'compare_price', 'sku', 'stock_quantity', 'manage_stock'),
-            'description': 'برای محصولات متغیر، قیمت‌ها در انواع محصول تنظیم می‌شوند'
+        ('نوع و قیمت', {
+            'fields': (
+                'product_type', 'base_price', 'effective_price', 'compare_price', 
+                'cost_price', 'discount_percentage'
+            )
+        }),
+        ('موجودی', {
+            'fields': (
+                'sku', 'stock_quantity', 'manage_stock', 'low_stock_threshold',
+                'in_stock', 'is_low_stock'
+            )
         }),
         ('رسانه', {
-            'fields': ('featured_image',),
+            'fields': ('featured_image', 'weight')
         }),
-        ('محصول دیجیتال', {
-            'fields': ('digital_file', 'download_limit', 'download_expiry_days'),
-            'classes': ('collapse',),
-        }),
-        ('سئو', {
+        ('SEO', {
             'fields': ('meta_title', 'meta_description'),
             'classes': ('collapse',)
         }),
-        ('تنظیمات', {
-            'fields': ('status', 'is_featured', 'tags')
-        })
+        ('وضعیت', {
+            'fields': ('status', 'is_featured')
+        }),
+        ('شبکه اجتماعی', {
+            'fields': (
+                'imported_from_social', 'social_media_source', 'social_media_post_id'
+            ),
+            'classes': ('collapse',)
+        }),
+        ('آمار', {
+            'fields': (
+                'view_count', 'sales_count', 'rating_average', 'rating_count',
+                'created_at', 'updated_at', 'published_at'
+            ),
+            'classes': ('collapse',)
+        }),
     )
     
-    inlines = [ProductImageInline, ProductAttributeValueInline, ProductVariantInline]
+    def effective_price(self, obj):
+        return f"{obj.get_effective_price():,} تومان"
+    effective_price.short_description = "قیمت مؤثر"
     
-    def price_display(self, obj):
-        """Show price or price range"""
-        if obj.product_type == 'variable':
-            min_price, max_price = obj.get_price_range()
-            if min_price == max_price:
-                return f'{min_price:,} تومان'
-            return f'{min_price:,} - {max_price:,} تومان'
-        return f'{obj.base_price:,} تومان'
-    price_display.short_description = 'قیمت'
+    def in_stock(self, obj):
+        return obj.in_stock
+    in_stock.boolean = True
+    in_stock.short_description = "موجود"
     
-    def stock_status(self, obj):
-        """Show stock status with colors"""
-        if obj.product_type == 'variable':
-            total_stock = sum(v.stock_quantity for v in obj.get_variants())
-            if total_stock > 10:
-                return format_html('<span style="color: green;">موجود ({})</span>', total_stock)
-            elif total_stock > 0:
-                return format_html('<span style="color: orange;">کم موجود ({})</span>', total_stock)
-            else:
-                return format_html('<span style="color: red;">ناموجود</span>')
-        else:
-            if obj.stock_quantity > 10:
-                return format_html('<span style="color: green;">موجود ({})</span>', obj.stock_quantity)
-            elif obj.stock_quantity > 0:
-                return format_html('<span style="color: orange;">کم موجود ({})</span>', obj.stock_quantity)
-            else:
-                return format_html('<span style="color: red;">ناموجود</span>')
-    stock_status.short_description = 'وضعیت موجودی'
+    def discount_percentage(self, obj):
+        return f"{obj.discount_percentage}%" if obj.discount_percentage else "-"
+    discount_percentage.short_description = "درصد تخفیف"
+    
+    def is_low_stock(self, obj):
+        return obj.is_low_stock
+    is_low_stock.boolean = True
+    is_low_stock.short_description = "موجودی کم"
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'store', 'product_class', 'category', 'brand'
+        ).prefetch_related('tags')
 
 @admin.register(ProductVariant)
 class ProductVariantAdmin(admin.ModelAdmin):
-    """Standalone variant management"""
-    
-    list_display = ['__str__', 'product', 'price', 'stock_quantity', 'is_active', 'is_default']
-    list_filter = ['product__category', 'is_active', 'is_default']
+    list_display = [
+        'product', 'sku', 'price', 'stock_quantity', 
+        'is_active', 'is_default', 'in_stock'
+    ]
+    list_filter = ['is_active', 'is_default', 'product__store']
     search_fields = ['sku', 'product__name_fa']
+    ordering = ['product', 'price']
+    readonly_fields = ['in_stock', 'discount_percentage']
+    autocomplete_fields = ['product']
     
-    inlines = [ProductAttributeValueInline]
+    def in_stock(self, obj):
+        return obj.in_stock
+    in_stock.boolean = True
+    
+    def discount_percentage(self, obj):
+        return f"{obj.discount_percentage}%"
+
+@admin.register(ProductImage)
+class ProductImageAdmin(admin.ModelAdmin):
+    list_display = ['product', 'image_preview', 'is_featured', 'display_order', 'imported_from_social']
+    list_filter = ['is_featured', 'imported_from_social', 'product__store']
+    search_fields = ['product__name_fa', 'alt_text']
+    ordering = ['product', 'display_order']
+    readonly_fields = ['image_preview']
+    autocomplete_fields = ['product', 'variant']
+    
+    def image_preview(self, obj):
+        if obj.image:
+            return format_html('<img src="{}" style="max-height: 100px;"/>', obj.image.url)
+        return "No Image"
+    image_preview.short_description = "Preview"
 
 @admin.register(Collection)
 class CollectionAdmin(admin.ModelAdmin):
-    """Product collection management"""
-    
-    list_display = ['name_fa', 'collection_type', 'is_featured', 'is_active', 'display_order']
-    list_filter = ['collection_type', 'is_featured', 'is_active']
-    search_fields = ['name_fa', 'name', 'description']
+    list_display = ['name_fa', 'store', 'products_count', 'is_featured', 'is_active']
+    list_filter = ['store', 'is_featured', 'is_active']
+    search_fields = ['name_fa', 'name']
+    ordering = ['display_order', 'name_fa']
     prepopulated_fields = {'slug': ('name',)}
     filter_horizontal = ['products']
     
-    fieldsets = (
-        ('اطلاعات اصلی', {
-            'fields': ('name', 'name_fa', 'slug', 'description', 'collection_type')
-        }),
-        ('قوانین خودکار', {
-            'fields': ('auto_rules',),
-            'classes': ('collapse',),
-            'description': 'فقط برای مجموعه‌های خودکار'
-        }),
-        ('نمایش', {
-            'fields': ('featured_image', 'is_featured', 'display_order', 'is_active')
-        }),
-        ('سئو', {
-            'fields': ('meta_title', 'meta_description'),
-            'classes': ('collapse',)
-        }),
-        ('محصولات', {
-            'fields': ('products',),
-            'description': 'فقط برای مجموعه‌های دستی'
-        })
-    )
+    def products_count(self, obj):
+        return obj.products.count()
+    products_count.short_description = "تعداد محصولات"
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('store').prefetch_related('products')
 
-# Custom admin site for store owners
-admin.site.site_header = 'مدیریت فروشگاه مال'
-admin.site.site_title = 'پنل مدیریت مال'
-admin.site.index_title = 'خوش آمدید به پنل مدیریت'
+# Admin site customization
+admin.site.site_header = "مال - پنل مدیریت"
+admin.site.site_title = "مال - مدیریت محصولات"
+admin.site.index_title = "خوش آمدید به پنل مدیریت مال"
