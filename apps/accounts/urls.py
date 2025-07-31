@@ -9,13 +9,25 @@ from .views import (
     revoke_session,
     CustomTokenRefreshView
 )
+from .otp_views import (
+    send_otp as send_otp_new,
+    verify_otp as verify_otp_new,
+    resend_otp,
+    check_phone_exists
+)
 
 app_name = 'accounts'
 
 urlpatterns = [
-    # Authentication
-    path('auth/send-otp/', send_otp, name='send_otp'),
-    path('auth/verify-otp/', verify_otp, name='verify_otp'),
+    # OTP Authentication (NEW - Product Description Requirement)
+    path('send-otp/', send_otp_new, name='send_otp_new'),
+    path('verify-otp/', verify_otp_new, name='verify_otp_new'),
+    path('resend-otp/', resend_otp, name='resend_otp'),
+    path('check-phone/', check_phone_exists, name='check_phone_exists'),
+    
+    # Legacy Authentication (keeping for backward compatibility)
+    path('auth/send-otp/', send_otp, name='send_otp_legacy'),
+    path('auth/verify-otp/', verify_otp, name='verify_otp_legacy'),
     path('auth/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/logout/', logout, name='logout'),
     
