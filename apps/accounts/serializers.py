@@ -1,178 +1,166 @@
 from rest_framework import serializers
-from django.contrib.auth import authenticate
-from django.contrib.auth.password_validation import validate_password
-from .models import User, OTPVerification, UserNotification
-from apps.core.validators import MallValidators
+from django.contrib.auth import get_user_model
+from apps.accounts.otp_models import OTPCode, UserProfile, LoginAttempt
 
-class UserRegistrationSerializer(serializers.ModelSerializer):
-    """Complete user registration with validation"""
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-    confirm_password = serializers.CharField(write_only=True)
+User = get_user_model()
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    """Serializer for user profile"""
     
     class Meta:
-        model = User
+        model = UserProfile
         fields = [
-            'phone', 'first_name', 'last_name', 'email', 
-            'password', 'confirm_password'
+            'date_of_birth', 'gender', 'avatar', 'bio',
+            'address', 'city', 'state', 'postal_code',
+            'email_notifications', 'sms_notifications'
         ]
-    
-    def validate_phone(self, value):
-        """Validate Iranian phone number"""
-        return MallValidators.validate_iranian_phone(value)
-    
-    def validate(self, attrs):
-        """Validate password confirmation"""
-        if attrs['password'] != attrs['confirm_password']:
-            raise serializers.ValidationError("رمز عبور و تکرار آن یکسان نیستند")
-        return attrs
-    
-    def create(self, validated_data):
-        """Create user with proper validation"""
-        validated_data.pop('confirm_password')
-        user = User.objects.create_user(**validated_data)
-        return user
+        extra_kwargs = {
+            'avatar': {'required': False},
+        }
 
-class UserLoginSerializer(serializers.Serializer):
-    """User login with OTP support"""
-    phone = serializers.CharField()
-    password = serializers.CharField(required=False)
-    otp_code = serializers.CharField(required=False)
-    
-    def validate_phone(self, value):
-        return MallValidators.validate_iranian_phone(value)
-    
-    def validate(self, attrs):
-        phone = attrs.get('phone')
-        password = attrs.get('password')
-        otp_code = attrs.get('otp_code')
-        
-        if not password and not otp_code:
-            raise serializers.ValidationError("رمز عبور یا کد تأیید الزامی است")
-        
-        # Try password authentication first
-        if password:
-            user = authenticate(username=phone, password=password)
-            if user:
-                attrs['user'] = user
-                return attrs
-        
-        # Try OTP authentication
-        if otp_code:
-            try:
-                otp = OTPVerification.objects.get(
-                    phone=phone,
-                    otp_code=otp_code,
-                    is_verified=False,
-                    purpose='login'
-                )
-                is_valid, message = otp.verify(otp_code)
-                if is_valid:
-                    user = User.objects.get(phone=phone)
-                    attrs['user'] = user
-                    return attrs
-                else:
-                    raise serializers.ValidationError(message)
-            except OTPVerification.DoesNotExist:
-                raise serializers.ValidationError("کد تأیید معتبر نیست")
-        
-        raise serializers.ValidationError("اطلاعات ورود صحیح نیست")
-
-class OTPRequestSerializer(serializers.Serializer):
-    """Request OTP for various purposes"""
-    phone = serializers.CharField()
-    purpose = serializers.ChoiceField(choices=[
-        ('login', 'ورود'),
-        ('register', 'ثبت‌نام'),
-        ('password_reset', 'بازیابی رمز عبور'),
-        ('phone_verification', 'تأیید شماره تلفن')
-    ])
-    
-    def validate_phone(self, value):
-        return MallValidators.validate_iranian_phone(value)
-
-class OTPVerifySerializer(serializers.Serializer):
-    """Verify OTP code"""
-    phone = serializers.CharField()
-    otp_code = serializers.CharField(max_length=6, min_length=6)
-    purpose = serializers.CharField()
-    
-    def validate_phone(self, value):
-        return MallValidators.validate_iranian_phone(value)
-    
-    def validate(self, attrs):
-        try:
-            otp = OTPVerification.objects.get(
-                phone=attrs['phone'],
-                otp_code=attrs['otp_code'],
-                purpose=attrs['purpose'],
-                is_verified=False
-            )
-            
-            is_valid, message = otp.verify(attrs['otp_code'])
-            if not is_valid:
-                raise serializers.ValidationError(message)
-            
-            attrs['otp'] = otp
-            return attrs
-            
-        except OTPVerification.DoesNotExist:
-            raise serializers.ValidationError("کد تأیید معتبر نیست")
 
 class UserSerializer(serializers.ModelSerializer):
-    """Complete user serializer"""
-    full_name = serializers.ReadOnlyField()
+    """
+    User serializer for API responses
+    Includes profile information
+    """
+    profile = UserProfileSerializer(read_only=True)
+    full_name = serializers.SerializerMethodField()
     
     class Meta:
         model = User
         fields = [
-            'id', 'phone', 'username', 'email', 'first_name', 'last_name',
-            'full_name', 'is_store_owner', 'is_customer', 'is_verified',
-            'avatar', 'birth_date', 'gender', 'city', 'state', 'address',
-            'postal_code', 'language', 'timezone', 'accepts_marketing',
-            'created_at', 'updated_at'
+            'id', 'phone_number', 'first_name', 'last_name', 'email',
+            'is_phone_verified', 'is_store_owner', 'is_active',
+            'date_joined', 'last_login', 'profile', 'full_name'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'full_name']
+        read_only_fields = [
+            'id', 'phone_number', 'is_phone_verified', 'date_joined', 'last_login'
+        ]
+    
+    def get_full_name(self, obj):
+        """Get user's full name"""
+        return f"{obj.first_name} {obj.last_name}".strip()
+
 
 class UserUpdateSerializer(serializers.ModelSerializer):
-    """Update user profile"""
+    """Serializer for updating user information"""
+    profile = UserProfileSerializer(required=False)
+    
     class Meta:
         model = User
-        fields = [
-            'first_name', 'last_name', 'email', 'avatar', 'birth_date',
-            'gender', 'city', 'state', 'address', 'postal_code',
-            'language', 'timezone', 'accepts_marketing'
-        ]
+        fields = ['first_name', 'last_name', 'email', 'profile']
+    
+    def update(self, instance, validated_data):
+        """Update user and profile"""
+        profile_data = validated_data.pop('profile', {})
+        
+        # Update user fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        # Update profile
+        if profile_data:
+            profile = instance.profile
+            for attr, value in profile_data.items():
+                setattr(profile, attr, value)
+            profile.save()
+        
+        return instance
 
-class PasswordChangeSerializer(serializers.Serializer):
-    """Change user password"""
-    old_password = serializers.CharField()
-    new_password = serializers.CharField(validators=[validate_password])
-    confirm_password = serializers.CharField()
+
+class OTPCodeSerializer(serializers.ModelSerializer):
+    """Serializer for OTP codes (admin use)"""
     
-    def validate(self, attrs):
-        if attrs['new_password'] != attrs['confirm_password']:
-            raise serializers.ValidationError("رمز عبور جدید و تکرار آن یکسان نیستند")
-        return attrs
+    class Meta:
+        model = OTPCode
+        fields = [
+            'id', 'phone_number', 'code_type', 'is_used',
+            'created_at', 'expires_at', 'attempts'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class LoginAttemptSerializer(serializers.ModelSerializer):
+    """Serializer for login attempts (admin use)"""
     
-    def validate_old_password(self, value):
-        user = self.context['request'].user
-        if not user.check_password(value):
-            raise serializers.ValidationError("رمز عبور فعلی صحیح نیست")
+    class Meta:
+        model = LoginAttempt
+        fields = [
+            'id', 'phone_number', 'ip_address', 'is_successful',
+            'created_at', 'user_agent'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class SendOTPSerializer(serializers.Serializer):
+    """Serializer for sending OTP request"""
+    phone_number = serializers.CharField(max_length=15)
+    code_type = serializers.ChoiceField(
+        choices=['login', 'register', 'password_reset', 'phone_verify'],
+        default='login'
+    )
+    
+    def validate_phone_number(self, value):
+        """Validate Iranian phone number format"""
+        import re
+        
+        # Remove all non-digit characters
+        digits = re.sub(r'\D', '', value)
+        
+        # Check various Iranian mobile formats
+        if not re.match(r'^((\+98|0098|98|0)?9\d{9})$', value):
+            raise serializers.ValidationError("شماره تلفن نامعتبر است")
+        
         return value
 
-class UserNotificationSerializer(serializers.ModelSerializer):
-    """User notifications"""
-    class Meta:
-        model = UserNotification
-        fields = [
-            'id', 'title', 'message', 'notification_type', 'is_read',
-            'action_url', 'data', 'created_at', 'read_at'
-        ]
-        read_only_fields = ['id', 'created_at', 'read_at']
 
-class OTPVerificationSerializer(serializers.ModelSerializer):
-    """OTP verification display"""
-    class Meta:
-        model = OTPVerification
-        fields = ['phone', 'purpose', 'is_verified', 'created_at', 'expires_at']
-        read_only_fields = ['created_at', 'expires_at']
+class VerifyOTPSerializer(serializers.Serializer):
+    """Serializer for verifying OTP"""
+    phone_number = serializers.CharField(max_length=15)
+    code = serializers.CharField(max_length=6, min_length=6)
+    code_type = serializers.ChoiceField(
+        choices=['login', 'register', 'password_reset', 'phone_verify'],
+        default='login'
+    )
+    user_data = serializers.DictField(required=False)
+    
+    def validate_code(self, value):
+        """Validate OTP code format"""
+        if not value.isdigit():
+            raise serializers.ValidationError("کد تایید باید شامل اعداد باشد")
+        return value
+    
+    def validate(self, attrs):
+        """Cross-field validation"""
+        code_type = attrs.get('code_type')
+        user_data = attrs.get('user_data', {})
+        
+        # For registration, require user data
+        if code_type == 'register':
+            if not user_data.get('first_name'):
+                raise serializers.ValidationError({
+                    'user_data': 'نام الزامی است'
+                })
+            if not user_data.get('last_name'):
+                raise serializers.ValidationError({
+                    'user_data': 'نام خانوادگی الزامی است'
+                })
+        
+        return attrs
+
+
+class CheckPhoneSerializer(serializers.Serializer):
+    """Serializer for checking if phone exists"""
+    phone_number = serializers.CharField(max_length=15)
+    
+    def validate_phone_number(self, value):
+        """Validate Iranian phone number format"""
+        import re
+        
+        if not re.match(r'^((\+98|0098|98|0)?9\d{9})$', value):
+            raise serializers.ValidationError("شماره تلفن نامعتبر است")
+        
+        return value
