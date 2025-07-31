@@ -1,0 +1,154 @@
+/* Enhanced Color Picker Styles for Django Admin */
+
+.color-picker-input {
+    width: 60px !important;
+    height: 35px !important;
+    padding: 2px !important;
+    border: 2px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    background: none;
+}
+
+.color-picker-input:hover {
+    border-color: #aaa;
+}
+
+.color-picker-input:focus {
+    border-color: #007cba;
+    box-shadow: 0 0 0 1px #007cba;
+    outline: none;
+}
+
+/* Color preview in admin list */
+.admin-color-preview {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+
+/* Enhanced tabular inline for product attributes */
+.tabular .color-picker-input {
+    width: 80px !important;
+    height: 30px !important;
+}
+
+/* Color attribute type indicator */
+.color-type-indicator {
+    display: inline-block;
+    width: 30px;
+    height: 15px;
+    border-radius: 3px;
+    border: 1px solid #ccc;
+    background: linear-gradient(90deg, #ff0000, #00ff00, #0000ff);
+}
+
+/* Stock warning styles */
+.stock-warning-critical {
+    color: #dc3545 !important;
+    font-weight: bold;
+}
+
+.stock-warning-low {
+    color: #ffc107 !important;
+    font-weight: bold;
+}
+
+.stock-available {
+    color: #28a745 !important;
+}
+
+/* Product attribute value display improvements */
+.attribute-value-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.color-display-preview {
+    width: 20px;
+    height: 20px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+/* Enhanced form field layouts */
+.field-value_color .form-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.field-value_color label {
+    margin-bottom: 0;
+}
+
+/* Tabular inline enhancements */
+.tabular tr.has_original .field-color_preview {
+    text-align: center;
+}
+
+.tabular .field-color_preview div {
+    margin: 0 auto;
+}
+
+/* Responsive improvements */
+@media (max-width: 768px) {
+    .color-picker-input {
+        width: 50px !important;
+        height: 30px !important;
+    }
+    
+    .admin-color-preview {
+        width: 16px;
+        height: 16px;
+    }
+    
+    .attribute-value-display {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+}
+
+/* Admin change form improvements */
+.form-row .color-picker-input {
+    display: inline-block;
+    margin-left: 10px;
+}
+
+.form-row .color-preview-label {
+    display: inline-block;
+    margin-left: 10px;
+    font-size: 12px;
+    color: #666;
+}
+
+/* Help text styling */
+.help-color-picker {
+    font-size: 11px;
+    color: #666;
+    margin-top: 2px;
+}
+
+/* Loading states */
+.color-picker-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Error states */
+.color-picker-error {
+    border-color: #dc3545 !important;
+    background-color: #fff5f5;
+}
+
+.color-picker-error:focus {
+    border-color: #dc3545 !important;
+    box-shadow: 0 0 0 1px #dc3545;
+}
