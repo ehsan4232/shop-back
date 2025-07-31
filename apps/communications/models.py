@@ -1,398 +1,23 @@
 from django.db import models
-from django.utils import timezone
+from apps.core.mixins import StoreOwnedMixin, TimestampMixin
+from apps.accounts.models import UserProfile
+from apps.products.models import Product, ProductCategory, Brand
 import uuid
 
-class NotificationTemplate(models.Model):
-    """
-    Template for notifications (SMS, Email, Push)
-    """
-    TEMPLATE_TYPES = [
-        ('sms', 'پیامک'),
-        ('email', 'ایمیل'),
-        ('push', 'اعلان موبایل'),
-    ]
-    
-    EVENT_TYPES = [
-        ('order_created', 'ایجاد سفارش'),
-        ('order_paid', 'پرداخت سفارش'),
-        ('order_shipped', 'ارسال سفارش'),
-        ('order_delivered', 'تحویل سفارش'),
-        ('order_cancelled', 'لغو سفارش'),
-        ('payment_completed', 'تکمیل پرداخت'),
-        ('payment_failed', 'خطا در پرداخت'),
-        ('low_stock', 'موجودی کم'),
-        ('welcome', 'خوش‌آمدگویی'),
-        ('otp', 'کد تأیید'),
-    ]
-    
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='notification_templates')
-    
-    name = models.CharField(max_length=100, verbose_name='نام قالب')
-    template_type = models.CharField(max_length=20, choices=TEMPLATE_TYPES, verbose_name='نوع قالب')
-    event_type = models.CharField(max_length=50, choices=EVENT_TYPES, verbose_name='نوع رویداد')
-    
-    # Template content
-    subject = models.CharField(max_length=200, blank=True, verbose_name='موضوع')
-    content = models.TextField(verbose_name='محتوا')
-    html_content = models.TextField(blank=True, verbose_name='محتوای HTML')
-    
-    # Settings
-    is_active = models.BooleanField(default=True, verbose_name='فعال')
-    is_default = models.BooleanField(default=False, verbose_name='پیش‌فرض')
-    
-    # Variables help
-    available_variables = models.JSONField(
-        default=list,
-        verbose_name='متغیرهای قابل استفاده',
-        help_text='لیست متغیرهایی که در قالب قابل استفاده هستند'
-    )
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        verbose_name = 'قالب اعلان'
-        verbose_name_plural = 'قالب‌های اعلان'
-        unique_together = ['store', 'template_type', 'event_type', 'is_default']
-    
-    def __str__(self):
-        return f"{self.name} - {self.get_template_type_display()}"
 
-class Notification(models.Model):
+class SMSCampaign(StoreOwnedMixin, TimestampMixin):
     """
-    Base notification model
-    """
-    NOTIFICATION_TYPES = [
-        ('sms', 'پیامک'),
-        ('email', 'ایمیل'),
-        ('push', 'اعلان موبایل'),
-        ('in_app', 'اعلان درون‌برنامه‌ای'),
-    ]
-    
-    STATUS_CHOICES = [
-        ('pending', 'در انتظار ارسال'),
-        ('sent', 'ارسال شده'),
-        ('failed', 'ناموفق'),
-        ('delivered', 'تحویل داده شده'),
-        ('read', 'خوانده شده'),
-    ]
-    
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='notifications')
-    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, related_name='received_notifications')
-    
-    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, verbose_name='نوع اعلان')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='وضعیت')
-    
-    # Content
-    title = models.CharField(max_length=200, verbose_name='عنوان')
-    message = models.TextField(verbose_name='پیام')
-    
-    # Recipient info
-    recipient_phone = models.CharField(max_length=15, blank=True, verbose_name='شماره گیرنده')
-    recipient_email = models.EmailField(blank=True, verbose_name='ایمیل گیرنده')
-    
-    # Metadata
-    template = models.ForeignKey(
-        NotificationTemplate, 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True,
-        verbose_name='قالب استفاده شده'
-    )
-    event_type = models.CharField(max_length=50, blank=True, verbose_name='نوع رویداد')
-    reference_id = models.CharField(max_length=100, blank=True, verbose_name='شناسه مرجع')
-    
-    # Delivery tracking
-    sent_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان ارسال')
-    delivered_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان تحویل')
-    read_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان خواندن')
-    
-    # Provider response
-    provider_response = models.JSONField(default=dict, blank=True, verbose_name='پاسخ ارائه‌دهنده')
-    error_message = models.TextField(blank=True, verbose_name='پیام خطا')
-    
-    # Cost tracking
-    cost = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name='هزینه')
-    
-    # Retry logic
-    retry_count = models.PositiveIntegerField(default=0, verbose_name='تعداد تلاش مجدد')
-    max_retries = models.PositiveIntegerField(default=3, verbose_name='حداکثر تلاش مجدد')
-    next_retry_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان تلاش مجدد بعدی')
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        verbose_name = 'اعلان'
-        verbose_name_plural = 'اعلانات'
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['store', 'status', '-created_at']),
-            models.Index(fields=['user', 'notification_type', '-created_at']),
-            models.Index(fields=['status', 'next_retry_at']),
-        ]
-    
-    def __str__(self):
-        return f"{self.title} - {self.get_notification_type_display()}"
-    
-    def mark_as_sent(self):
-        """Mark notification as sent"""
-        self.status = 'sent'
-        self.sent_at = timezone.now()
-        self.save(update_fields=['status', 'sent_at'])
-    
-    def mark_as_delivered(self):
-        """Mark notification as delivered"""
-        self.status = 'delivered'
-        self.delivered_at = timezone.now()
-        self.save(update_fields=['status', 'delivered_at'])
-    
-    def mark_as_read(self):
-        """Mark notification as read"""
-        self.status = 'read'
-        self.read_at = timezone.now()
-        self.save(update_fields=['status', 'read_at'])
-    
-    def mark_as_failed(self, error_message: str = ""):
-        """Mark notification as failed"""
-        self.status = 'failed'
-        self.error_message = error_message
-        self.save(update_fields=['status', 'error_message'])
-    
-    def can_retry(self) -> bool:
-        """Check if notification can be retried"""
-        return (
-            self.status == 'failed' and 
-            self.retry_count < self.max_retries and
-            (not self.next_retry_at or timezone.now() >= self.next_retry_at)
-        )
-    
-    def schedule_retry(self, delay_minutes: int = 5):
-        """Schedule notification for retry"""
-        if self.retry_count < self.max_retries:
-            self.retry_count += 1
-            self.next_retry_at = timezone.now() + timezone.timedelta(minutes=delay_minutes)
-            self.status = 'pending'
-            self.save(update_fields=['retry_count', 'next_retry_at', 'status'])
-
-class SMSLog(models.Model):
-    """
-    SMS sending log
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    notification = models.OneToOneField(
-        Notification, 
-        on_delete=models.CASCADE, 
-        null=True, 
-        blank=True,
-        related_name='sms_log'
-    )
-    
-    phone = models.CharField(max_length=15, verbose_name='شماره تلفن')
-    message = models.TextField(verbose_name='پیام')
-    template_name = models.CharField(max_length=100, blank=True, verbose_name='نام قالب')
-    
-    status = models.CharField(
-        max_length=20,
-        choices=[
-            ('pending', 'در انتظار'),
-            ('sent', 'ارسال شده'),
-            ('failed', 'ناموفق'),
-            ('delivered', 'تحویل داده شده')
-        ],
-        default='pending',
-        verbose_name='وضعیت'
-    )
-    
-    # Provider details
-    provider = models.CharField(max_length=50, default='kavenegar', verbose_name='ارائه‌دهنده')
-    provider_message_id = models.CharField(max_length=100, blank=True, verbose_name='شناسه پیام ارائه‌دهنده')
-    provider_response = models.JSONField(default=dict, blank=True, verbose_name='پاسخ ارائه‌دهنده')
-    
-    # Cost and delivery tracking
-    cost = models.DecimalField(max_digits=8, decimal_places=2, default=0, verbose_name='هزینه')
-    parts_count = models.PositiveIntegerField(default=1, verbose_name='تعداد بخش')
-    
-    # Error handling
-    error_message = models.TextField(blank=True, verbose_name='پیام خطا')
-    retry_count = models.PositiveIntegerField(default=0, verbose_name='تعداد تلاش مجدد')
-    
-    sent_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان ارسال')
-    delivered_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان تحویل')
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        verbose_name = 'لاگ پیامک'
-        verbose_name_plural = 'لاگ‌های پیامک'
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['phone', '-created_at']),
-            models.Index(fields=['status', '-created_at']),
-            models.Index(fields=['provider_message_id']),
-        ]
-    
-    def __str__(self):
-        return f"SMS to {self.phone} - {self.status}"
-
-class EmailLog(models.Model):
-    """
-    Email sending log
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    notification = models.OneToOneField(
-        Notification, 
-        on_delete=models.CASCADE, 
-        null=True, 
-        blank=True,
-        related_name='email_log'
-    )
-    
-    to_email = models.EmailField(verbose_name='ایمیل گیرنده')
-    from_email = models.EmailField(verbose_name='ایمیل فرستنده')
-    subject = models.CharField(max_length=200, verbose_name='موضوع')
-    template_name = models.CharField(max_length=100, blank=True, verbose_name='نام قالب')
-    
-    status = models.CharField(
-        max_length=20,
-        choices=[
-            ('pending', 'در انتظار'),
-            ('sent', 'ارسال شده'),
-            ('failed', 'ناموفق'),
-            ('delivered', 'تحویل داده شده'),
-            ('opened', 'باز شده'),
-            ('clicked', 'کلیک شده')
-        ],
-        default='pending',
-        verbose_name='وضعیت'
-    )
-    
-    # Provider details
-    provider = models.CharField(max_length=50, default='smtp', verbose_name='ارائه‌دهنده')
-    provider_message_id = models.CharField(max_length=200, blank=True, verbose_name='شناسه پیام')
-    
-    # Tracking
-    opened_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان باز کردن')
-    clicked_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان کلیک')
-    
-    # Error handling
-    error_message = models.TextField(blank=True, verbose_name='پیام خطا')
-    retry_count = models.PositiveIntegerField(default=0, verbose_name='تعداد تلاش مجدد')
-    
-    sent_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان ارسال')
-    delivered_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان تحویل')
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        verbose_name = 'لاگ ایمیل'
-        verbose_name_plural = 'لاگ‌های ایمیل'
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['to_email', '-created_at']),
-            models.Index(fields=['status', '-created_at']),
-            models.Index(fields=['provider_message_id']),
-        ]
-    
-    def __str__(self):
-        return f"Email to {self.to_email} - {self.subject}"
-
-class NewsletterSubscription(models.Model):
-    """
-    Newsletter subscription management
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='newsletter_subscriptions')
-    
-    email = models.EmailField(verbose_name='ایمیل')
-    first_name = models.CharField(max_length=100, blank=True, verbose_name='نام')
-    last_name = models.CharField(max_length=100, blank=True, verbose_name='نام خانوادگی')
-    
-    # Subscription preferences
-    is_active = models.BooleanField(default=True, verbose_name='فعال')
-    subscribed_categories = models.ManyToManyField(
-        'products.ProductCategory',
-        blank=True,
-        verbose_name='دسته‌بندی‌های عضویت'
-    )
-    
-    # Tracking
-    source = models.CharField(
-        max_length=50,
-        choices=[
-            ('website', 'وب‌سایت'),
-            ('popup', 'پاپ‌آپ'),
-            ('checkout', 'فرآیند خرید'),
-            ('social', 'شبکه‌های اجتماعی'),
-            ('manual', 'دستی')
-        ],
-        default='website',
-        verbose_name='منبع عضویت'
-    )
-    
-    ip_address = models.GenericIPAddressField(null=True, blank=True, verbose_name='آدرس IP')
-    user_agent = models.TextField(blank=True, verbose_name='User Agent')
-    
-    # Confirmation
-    is_confirmed = models.BooleanField(default=False, verbose_name='تأیید شده')
-    confirmation_token = models.CharField(max_length=100, blank=True, verbose_name='توکن تأیید')
-    confirmed_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان تأیید')
-    
-    # Unsubscribe
-    unsubscribe_token = models.CharField(max_length=100, blank=True, verbose_name='توکن لغو عضویت')
-    unsubscribed_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان لغو عضویت')
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        unique_together = ['store', 'email']
-        verbose_name = 'عضویت خبرنامه'
-        verbose_name_plural = 'عضویت‌های خبرنامه'
-        indexes = [
-            models.Index(fields=['store', 'is_active', 'is_confirmed']),
-            models.Index(fields=['email']),
-            models.Index(fields=['confirmation_token']),
-            models.Index(fields=['unsubscribe_token']),
-        ]
-    
-    def __str__(self):
-        return f"{self.email} - {self.store.name_fa}"
-    
-    def save(self, *args, **kwargs):
-        # Generate tokens if not provided
-        if not self.confirmation_token:
-            import secrets
-            self.confirmation_token = secrets.token_urlsafe(32)
-        
-        if not self.unsubscribe_token:
-            import secrets
-            self.unsubscribe_token = secrets.token_urlsafe(32)
-        
-        super().save(*args, **kwargs)
-    
-    def confirm_subscription(self):
-        """Confirm newsletter subscription"""
-        self.is_confirmed = True
-        self.confirmed_at = timezone.now()
-        self.save(update_fields=['is_confirmed', 'confirmed_at'])
-    
-    def unsubscribe(self):
-        """Unsubscribe from newsletter"""
-        self.is_active = False
-        self.unsubscribed_at = timezone.now()
-        self.save(update_fields=['is_active', 'unsubscribed_at'])
-
-class Campaign(models.Model):
-    """
-    Marketing campaign management
+    SMS Marketing Campaigns for stores
+    Product description: "Shops can send promotion campaigns through SMS"
     """
     CAMPAIGN_TYPES = [
-        ('newsletter', 'خبرنامه'),
         ('promotion', 'تبلیغات'),
-        ('announcement', 'اطلاعیه'),
-        ('welcome', 'خوش‌آمدگویی'),
-        ('abandoned_cart', 'سبد خرید رها شده'),
+        ('discount', 'تخفیف'),
+        ('new_product', 'محصول جدید'),
+        ('restock', 'تجدید موجودی'),
+        ('event', 'رویداد'),
+        ('newsletter', 'خبرنامه'),
+        ('custom', 'سفارشی'),
     ]
     
     STATUS_CHOICES = [
@@ -400,74 +25,356 @@ class Campaign(models.Model):
         ('scheduled', 'زمان‌بندی شده'),
         ('sending', 'در حال ارسال'),
         ('sent', 'ارسال شده'),
-        ('paused', 'متوقف شده'),
+        ('failed', 'ناموفق'),
         ('cancelled', 'لغو شده'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    store = models.ForeignKey('stores.Store', on_delete=models.CASCADE, related_name='campaigns')
     
-    name = models.CharField(max_length=200, verbose_name='نام کمپین')
-    campaign_type = models.CharField(max_length=50, choices=CAMPAIGN_TYPES, verbose_name='نوع کمپین')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='وضعیت')
+    # Campaign details
+    name = models.CharField(max_length=100, verbose_name='نام کمپین')
+    campaign_type = models.CharField(max_length=20, choices=CAMPAIGN_TYPES, verbose_name='نوع کمپین')
     
-    # Content
-    subject = models.CharField(max_length=200, verbose_name='موضوع')
-    content = models.TextField(verbose_name='محتوا')
-    html_content = models.TextField(blank=True, verbose_name='محتوای HTML')
+    # Message content
+    message_text = models.TextField(max_length=500, verbose_name='متن پیام')  # SMS limit consideration
+    sender_name = models.CharField(max_length=11, verbose_name='نام فرستنده')  # SMS sender number/name
     
     # Targeting
-    target_all_subscribers = models.BooleanField(default=True, verbose_name='ارسال به همه مشترکین')
+    target_all_customers = models.BooleanField(default=False, verbose_name='ارسال به همه مشتریان')
+    target_phone_numbers = models.JSONField(default=list, blank=True, verbose_name='شماره‌های هدف')
+    
+    # Product/Category targeting
+    target_by_purchase_history = models.BooleanField(default=False, verbose_name='بر اساس تاریخچه خرید')
     target_categories = models.ManyToManyField(
-        'products.ProductCategory',
-        blank=True,
-        verbose_name='دسته‌بندی‌های هدف'
+        ProductCategory, 
+        blank=True, 
+        verbose_name='دسته‌های هدف'
     )
-    target_customer_segments = models.JSONField(
-        default=list,
+    target_products = models.ManyToManyField(
+        Product, 
+        blank=True, 
+        verbose_name='محصولات هدف'
+    )
+    target_brands = models.ManyToManyField(
+        Brand, 
+        blank=True, 
+        verbose_name='برندهای هدف'
+    )
+    
+    # Customer segmentation
+    min_purchase_amount = models.DecimalField(
+        max_digits=12, 
+        decimal_places=0, 
+        null=True, 
         blank=True,
-        verbose_name='بخش‌های مشتری هدف'
+        verbose_name='حداقل مبلغ خرید'
+    )
+    max_purchase_amount = models.DecimalField(
+        max_digits=12, 
+        decimal_places=0, 
+        null=True, 
+        blank=True,
+        verbose_name='حداکثر مبلغ خرید'
+    )
+    days_since_last_purchase = models.PositiveIntegerField(
+        null=True, 
+        blank=True,
+        verbose_name='روز از آخرین خرید'
     )
     
     # Scheduling
-    scheduled_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان‌بندی شده')
     send_immediately = models.BooleanField(default=False, verbose_name='ارسال فوری')
+    scheduled_send_time = models.DateTimeField(null=True, blank=True, verbose_name='زمان ارسال')
     
-    # Tracking
-    total_recipients = models.PositiveIntegerField(default=0, verbose_name='تعداد کل گیرندگان')
-    sent_count = models.PositiveIntegerField(default=0, verbose_name='تعداد ارسال شده')
-    delivered_count = models.PositiveIntegerField(default=0, verbose_name='تعداد تحویل داده شده')
-    opened_count = models.PositiveIntegerField(default=0, verbose_name='تعداد باز شده')
-    clicked_count = models.PositiveIntegerField(default=0, verbose_name='تعداد کلیک شده')
+    # Campaign status and analytics
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='وضعیت')
+    total_recipients = models.PositiveIntegerField(default=0, verbose_name='تعداد مخاطبان')
+    messages_sent = models.PositiveIntegerField(default=0, verbose_name='پیام‌های ارسالی')
+    messages_delivered = models.PositiveIntegerField(default=0, verbose_name='پیام‌های تحویل شده')
+    messages_failed = models.PositiveIntegerField(default=0, verbose_name='پیام‌های ناموفق')
     
-    # Metrics
-    open_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name='نرخ باز کردن')
-    click_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name='نرخ کلیک')
+    # Cost tracking
+    estimated_cost = models.DecimalField(
+        max_digits=10, 
+        decimal_places=0, 
+        default=0,
+        verbose_name='هزینه تخمینی'
+    )
+    actual_cost = models.DecimalField(
+        max_digits=10, 
+        decimal_places=0, 
+        default=0,
+        verbose_name='هزینه واقعی'
+    )
     
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    # Performance tracking
+    clicks_count = models.PositiveIntegerField(default=0, verbose_name='تعداد کلیک')
+    conversions_count = models.PositiveIntegerField(default=0, verbose_name='تعداد تبدیل')
+    
+    # Timestamps
     sent_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان ارسال')
+    completed_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان تکمیل')
     
     class Meta:
-        verbose_name = 'کمپین'
-        verbose_name_plural = 'کمپین‌ها'
+        verbose_name = 'کمپین پیامکی'
+        verbose_name_plural = 'کمپین‌های پیامکی'
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['store', 'status', '-created_at']),
-            models.Index(fields=['campaign_type', 'status']),
-            models.Index(fields=['scheduled_at']),
+            models.Index(fields=['store', 'status']),
+            models.Index(fields=['campaign_type']),
+            models.Index(fields=['scheduled_send_time']),
+            models.Index(fields=['sent_at']),
         ]
     
     def __str__(self):
-        return f"{self.name} - {self.get_campaign_type_display()}"
+        return f"{self.store.name} - {self.name}"
     
-    def calculate_metrics(self):
-        """Calculate campaign metrics"""
-        if self.sent_count > 0:
-            self.open_rate = (self.opened_count / self.sent_count) * 100
-            self.click_rate = (self.clicked_count / self.sent_count) * 100
-        else:
-            self.open_rate = 0
-            self.click_rate = 0
+    def calculate_estimated_cost(self):
+        """Calculate estimated cost based on recipient count"""
+        # Iranian SMS cost per message (approximate)
+        cost_per_sms = 200  # Tomans
+        self.estimated_cost = self.total_recipients * cost_per_sms
+        return self.estimated_cost
+    
+    def get_target_recipients(self):
+        """Get list of target phone numbers based on campaign settings"""
+        phone_numbers = []
         
-        self.save(update_fields=['open_rate', 'click_rate'])
+        if self.target_all_customers:
+            # Get all customers of the store
+            from apps.orders.models import Order
+            customer_orders = Order.objects.filter(
+                store=self.store
+            ).values_list('customer__phone_number', flat=True).distinct()
+            phone_numbers.extend(customer_orders)
+        
+        # Add manually specified phone numbers
+        if self.target_phone_numbers:
+            phone_numbers.extend(self.target_phone_numbers)
+        
+        # Filter by purchase history if specified
+        if self.target_by_purchase_history:
+            from apps.orders.models import Order
+            from django.db.models import Sum, Q
+            from datetime import datetime, timedelta
+            
+            filters = Q(store=self.store)
+            
+            # Filter by purchase amount
+            if self.min_purchase_amount or self.max_purchase_amount:
+                orders = Order.objects.filter(filters).values(
+                    'customer__phone_number'
+                ).annotate(
+                    total_spent=Sum('total_amount')
+                )
+                
+                if self.min_purchase_amount:
+                    orders = orders.filter(total_spent__gte=self.min_purchase_amount)
+                if self.max_purchase_amount:
+                    orders = orders.filter(total_spent__lte=self.max_purchase_amount)
+                
+                phone_numbers.extend(orders.values_list('customer__phone_number', flat=True))
+            
+            # Filter by days since last purchase
+            if self.days_since_last_purchase:
+                cutoff_date = datetime.now() - timedelta(days=self.days_since_last_purchase)
+                recent_customers = Order.objects.filter(
+                    filters,
+                    created_at__gte=cutoff_date
+                ).values_list('customer__phone_number', flat=True).distinct()
+                phone_numbers.extend(recent_customers)
+        
+        # Filter by category/product/brand purchases
+        if self.target_categories.exists() or self.target_products.exists() or self.target_brands.exists():
+            from apps.orders.models import OrderItem
+            
+            category_customers = []
+            if self.target_categories.exists():
+                category_customers = OrderItem.objects.filter(
+                    order__store=self.store,
+                    product__category__in=self.target_categories.all()
+                ).values_list('order__customer__phone_number', flat=True).distinct()
+            
+            product_customers = []
+            if self.target_products.exists():
+                product_customers = OrderItem.objects.filter(
+                    order__store=self.store,
+                    product__in=self.target_products.all()
+                ).values_list('order__customer__phone_number', flat=True).distinct()
+            
+            brand_customers = []
+            if self.target_brands.exists():
+                brand_customers = OrderItem.objects.filter(
+                    order__store=self.store,
+                    product__brand__in=self.target_brands.all()
+                ).values_list('order__customer__phone_number', flat=True).distinct()
+            
+            phone_numbers.extend(category_customers)
+            phone_numbers.extend(product_customers)
+            phone_numbers.extend(brand_customers)
+        
+        # Remove duplicates and None values
+        unique_phone_numbers = list(set(filter(None, phone_numbers)))
+        
+        # Validate phone numbers
+        from apps.core.utils import validate_iranian_phone, format_iranian_phone
+        valid_phone_numbers = []
+        for phone in unique_phone_numbers:
+            formatted = format_iranian_phone(phone)
+            if formatted and validate_iranian_phone(formatted):
+                valid_phone_numbers.append(formatted)
+        
+        return valid_phone_numbers
+    
+    def update_recipient_count(self):
+        """Update total recipients count"""
+        self.total_recipients = len(self.get_target_recipients())
+        self.calculate_estimated_cost()
+        self.save(update_fields=['total_recipients', 'estimated_cost'])
+
+
+class SMSMessage(TimestampMixin):
+    """
+    Individual SMS messages sent as part of campaigns
+    """
+    STATUS_CHOICES = [
+        ('pending', 'در انتظار'),
+        ('sent', 'ارسال شده'),
+        ('delivered', 'تحویل شده'),
+        ('failed', 'ناموفق'),
+        ('clicked', 'کلیک شده'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    campaign = models.ForeignKey(SMSCampaign, on_delete=models.CASCADE, related_name='messages')
+    recipient_phone = models.CharField(max_length=11, verbose_name='شماره گیرنده')
+    message_text = models.TextField(verbose_name='متن پیام')
+    
+    # Status tracking
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='وضعیت')
+    sent_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان ارسال')
+    delivered_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان تحویل')
+    clicked_at = models.DateTimeField(null=True, blank=True, verbose_name='زمان کلیک')
+    
+    # Provider tracking
+    provider_message_id = models.CharField(max_length=100, blank=True, verbose_name='شناسه پیام از ارائه‌دهنده')
+    provider_response = models.JSONField(default=dict, blank=True, verbose_name='پاسخ ارائه‌دهنده')
+    
+    # Cost
+    cost = models.DecimalField(max_digits=6, decimal_places=0, default=0, verbose_name='هزینه')
+    
+    # Error tracking
+    error_message = models.TextField(blank=True, verbose_name='پیام خطا')
+    retry_count = models.PositiveIntegerField(default=0, verbose_name='تعداد تلاش مجدد')
+    
+    class Meta:
+        verbose_name = 'پیام پیامکی'
+        verbose_name_plural = 'پیام‌های پیامکی'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['campaign', 'status']),
+            models.Index(fields=['recipient_phone']),
+            models.Index(fields=['sent_at']),
+            models.Index(fields=['status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.campaign.name} - {self.recipient_phone}"
+
+
+class SMSTemplate(StoreOwnedMixin, TimestampMixin):
+    """
+    Reusable SMS message templates
+    """
+    TEMPLATE_TYPES = [
+        ('welcome', 'خوش‌آمدگویی'),
+        ('order_confirm', 'تأیید سفارش'),
+        ('shipping', 'ارسال کالا'),
+        ('delivery', 'تحویل کالا'),
+        ('promotion', 'تبلیغات'),
+        ('discount', 'تخفیف'),
+        ('birthday', 'تولد'),
+        ('reminder', 'یادآوری'),
+        ('survey', 'نظرسنجی'),
+        ('custom', 'سفارشی'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    name = models.CharField(max_length=100, verbose_name='نام قالب')
+    template_type = models.CharField(max_length=20, choices=TEMPLATE_TYPES, verbose_name='نوع قالب')
+    message_template = models.TextField(max_length=500, verbose_name='قالب پیام')
+    
+    # Template variables - for dynamic content
+    available_variables = models.JSONField(default=list, verbose_name='متغیرهای قابل استفاده')
+    
+    # Usage tracking
+    usage_count = models.PositiveIntegerField(default=0, verbose_name='تعداد استفاده')
+    is_active = models.BooleanField(default=True, verbose_name='فعال')
+    
+    class Meta:
+        verbose_name = 'قالب پیامک'
+        verbose_name_plural = 'قالب‌های پیامک'
+        ordering = ['template_type', 'name']
+        indexes = [
+            models.Index(fields=['store', 'template_type']),
+            models.Index(fields=['is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.store.name} - {self.name}"
+    
+    def render_message(self, context: dict = None) -> str:
+        """Render template with provided context variables"""
+        if not context:
+            context = {}
+        
+        # Simple template rendering - replace {variable} with values
+        message = self.message_template
+        for key, value in context.items():
+            placeholder = f"{{{key}}}"
+            message = message.replace(placeholder, str(value))
+        
+        return message
+    
+    def increment_usage(self):
+        """Increment usage count"""
+        self.usage_count += 1
+        self.save(update_fields=['usage_count'])
+
+
+# Signal handlers for campaign management
+from django.db.models.signals import post_save, pre_save
+from django.dispatch import receiver
+
+@receiver(pre_save, sender=SMSCampaign)
+def update_campaign_recipients(sender, instance, **kwargs):
+    """Update recipient count when campaign is saved"""
+    if instance.pk is None:  # New campaign
+        return
+    
+    # Update recipient count if targeting has changed
+    instance.update_recipient_count()
+
+@receiver(post_save, sender=SMSMessage)
+def update_campaign_stats(sender, instance, **kwargs):
+    """Update campaign statistics when message status changes"""
+    campaign = instance.campaign
+    
+    # Recalculate campaign stats
+    messages = campaign.messages.all()
+    campaign.messages_sent = messages.filter(status__in=['sent', 'delivered', 'clicked']).count()
+    campaign.messages_delivered = messages.filter(status__in=['delivered', 'clicked']).count()
+    campaign.messages_failed = messages.filter(status='failed').count()
+    campaign.clicks_count = messages.filter(status='clicked').count()
+    
+    # Calculate actual cost
+    campaign.actual_cost = messages.aggregate(
+        total_cost=models.Sum('cost')
+    )['total_cost'] or 0
+    
+    campaign.save(update_fields=[
+        'messages_sent', 'messages_delivered', 'messages_failed', 
+        'clicks_count', 'actual_cost'
+    ])
