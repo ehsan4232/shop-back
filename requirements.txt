@@ -18,6 +18,7 @@ djangorestframework-simplejwt==5.3.0
 
 # Multi-tenancy & Tree structures
 django-mptt==0.15.0
+django-tenant-schemas==1.14.0  # CRITICAL FIX: Added for multi-tenancy
 
 # File Storage & Media
 django-storages==1.14.2
@@ -95,3 +96,7 @@ django-modeltranslation==0.18.11  # Model translation
 django-rosetta==0.9.9  # Translation interface
 persiantools==4.0.0  # Persian text processing
 jdatetime==4.1.0  # Persian calendar support
+
+# CRITICAL FIX: Rate Limiting and Security
+django-ratelimit==4.1.0  # Rate limiting for API endpoints
+django-axes==6.1.1  # Login attempt monitoring
