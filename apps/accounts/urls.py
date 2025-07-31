@@ -15,6 +15,12 @@ from .otp_views import (
     resend_otp,
     check_phone_exists
 )
+from .auth_views import (
+    request_otp,
+    verify_otp as auth_verify_otp,
+    complete_store_owner_profile,
+    logout as auth_logout
+)
 
 app_name = 'accounts'
 
@@ -24,6 +30,12 @@ urlpatterns = [
     path('verify-otp/', verify_otp_new, name='verify_otp_new'),
     path('resend-otp/', resend_otp, name='resend_otp'),
     path('check-phone/', check_phone_exists, name='check_phone_exists'),
+    
+    # Enhanced OTP Auth (from auth_views.py)
+    path('auth/request-otp/', request_otp, name='request_otp'),
+    path('auth/verify-otp/', auth_verify_otp, name='auth_verify_otp'),
+    path('auth/complete-profile/', complete_store_owner_profile, name='complete_profile'),
+    path('auth/logout/', auth_logout, name='auth_logout'),
     
     # Legacy Authentication (keeping for backward compatibility)
     path('auth/send-otp/', send_otp, name='send_otp_legacy'),
