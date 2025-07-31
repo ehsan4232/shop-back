@@ -1,399 +1,264 @@
 from django.db import models
-from django.core.cache import cache
-from apps.core.mixins import TimestampMixin, StoreOwnedMixin
+from apps.core.mixins import StoreOwnedMixin, TimestampMixin
 import uuid
-import json
 
 
-class StoreTheme(StoreOwnedMixin, TimestampMixin):
+class Theme(TimestampMixin):
     """
-    Store themes for customizing store websites
-    Product requirement: "fancy and modern designs and layouts and themes"
+    Website themes for store customization
+    Product description: "various fancy and modern designs and layouts and themes for store owners to choose from"
     """
-    
     THEME_TYPES = [
         ('minimal', 'مینیمال'),
         ('modern', 'مدرن'),
         ('classic', 'کلاسیک'),
-        ('colorful', 'رنگارنگ'),
-        ('dark', 'تیره'),
-        ('professional', 'حرفه‌ای'),
-        ('creative', 'خلاقانه'),
         ('elegant', 'شیک'),
+        ('bold', 'پررنگ'),
+        ('business', 'تجاری'),
+        ('creative', 'خلاقانه'),
     ]
     
-    BUSINESS_CATEGORIES = [
-        ('fashion', 'پوشاک و مد'),
-        ('electronics', 'الکترونیک'),
-        ('jewelry', 'جواهرات'),
-        ('pets', 'حیوانات خانگی'),
-        ('food', 'مواد غذایی'),
-        ('beauty', 'آرایشی و بهداشتی'),
-        ('sports', 'ورزشی'),
-        ('books', 'کتاب و فرهنگ'),
-        ('home', 'خانه و آشپزخانه'),
-        ('general', 'عمومی'),
+    LAYOUT_TYPES = [
+        ('grid', 'شبکه‌ای'),
+        ('list', 'لیستی'),
+        ('masonry', 'آجری'),
+        ('carousel', 'کاروسل'),
+        ('magazine', 'مجله‌ای'),
+    ]
+    
+    COLOR_SCHEMES = [
+        ('red_blue_white', 'قرمز آبی سفید'),
+        ('blue_white', 'آبی سفید'),
+        ('dark_elegant', 'تیره شیک'),
+        ('warm_earth', 'زمینی گرم'),
+        ('cool_modern', 'مدرن سرد'),
+        ('vibrant_pop', 'رنگارنگ'),
+        ('custom', 'سفارشی'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
-    # Basic info
+    # Basic information
     name = models.CharField(max_length=100, verbose_name='نام قالب')
     name_fa = models.CharField(max_length=100, verbose_name='نام فارسی')
-    description = models.TextField(blank=True, verbose_name='توضیحات')
+    description = models.TextField(verbose_name='توضیحات')
     
     # Theme properties
     theme_type = models.CharField(max_length=20, choices=THEME_TYPES, verbose_name='نوع قالب')
-    business_category = models.CharField(
-        max_length=20, 
-        choices=BUSINESS_CATEGORIES, 
-        default='general',
-        verbose_name='دسته کسب‌وکار'
-    )
+    layout_type = models.CharField(max_length=20, choices=LAYOUT_TYPES, verbose_name='نوع چیدمان')
+    color_scheme = models.CharField(max_length=20, choices=COLOR_SCHEMES, default='red_blue_white', verbose_name='طرح رنگی')
     
-    # Visual properties
-    primary_color = models.CharField(max_length=7, default='#007bff', verbose_name='رنگ اصلی')
-    secondary_color = models.CharField(max_length=7, default='#6c757d', verbose_name='رنگ فرعی')
-    accent_color = models.CharField(max_length=7, default='#28a745', verbose_name='رنگ تاکیدی')
-    background_color = models.CharField(max_length=7, default='#ffffff', verbose_name='رنگ پس‌زمینه')
-    text_color = models.CharField(max_length=7, default='#212529', verbose_name='رنگ متن')
+    # Design assets
+    preview_image = models.ImageField(upload_to='themes/previews/', verbose_name='تصویر پیش‌نمایش')
+    thumbnail = models.ImageField(upload_to='themes/thumbnails/', verbose_name='تصویر کوچک')
+    demo_url = models.URLField(blank=True, verbose_name='لینک دمو')
     
-    # Typography
-    heading_font = models.CharField(
-        max_length=50, 
-        default='IRANSans',
-        verbose_name='فونت عناوین'
-    )
-    body_font = models.CharField(
-        max_length=50, 
-        default='IRANSans',
-        verbose_name='فونت متن'
-    )
+    # CSS and templates
+    css_file = models.FileField(upload_to='themes/css/', verbose_name='فایل CSS')
+    template_data = models.JSONField(default=dict, verbose_name='داده‌های قالب')
     
-    # Layout settings
-    layout_config = models.JSONField(default=dict, verbose_name='تنظیمات چیدمان')
+    # Customization options
+    customizable_colors = models.JSONField(default=list, verbose_name='رنگ‌های قابل تغییر')
+    customizable_fonts = models.JSONField(default=list, verbose_name='فونت‌های قابل تغییر')
+    layout_options = models.JSONField(default=dict, verbose_name='گزینه‌های چیدمان')
     
-    # Theme files and assets
-    css_file = models.TextField(blank=True, verbose_name='فایل CSS')
-    preview_image = models.ImageField(
-        upload_to='theme_previews/', 
-        null=True, 
-        blank=True, 
-        verbose_name='تصویر پیش‌نمایش'
-    )
-    
-    # Status
+    # Business logic
     is_active = models.BooleanField(default=True, verbose_name='فعال')
-    is_premium = models.BooleanField(default=False, verbose_name='پریمیوم')
-    is_public = models.BooleanField(default=True, verbose_name='عمومی')
+    is_premium = models.BooleanField(default=False, verbose_name='پریمیام')
+    price = models.DecimalField(max_digits=10, decimal_places=0, default=0, verbose_name='قیمت')
     
-    # Analytics
+    # Usage tracking
     usage_count = models.PositiveIntegerField(default=0, verbose_name='تعداد استفاده')
-    rating_average = models.DecimalField(
-        max_digits=3, 
-        decimal_places=2, 
-        default=0, 
-        verbose_name='میانگین امتیاز'
-    )
+    rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0, verbose_name='میانگین امتیاز')
     rating_count = models.PositiveIntegerField(default=0, verbose_name='تعداد امتیاز')
     
+    # Product type suggestions based on business
+    suggested_for_types = models.JSONField(default=list, verbose_name='پیشنهاد برای انواع کسب‌وکار')
+    
     class Meta:
-        verbose_name = 'قالب فروشگاه'
-        verbose_name_plural = 'قالب‌های فروشگاه'
+        verbose_name = 'قالب وبسایت'
+        verbose_name_plural = 'قالب‌های وبسایت'
         ordering = ['-usage_count', 'name_fa']
         indexes = [
-            models.Index(fields=['store', 'is_active']),
-            models.Index(fields=['theme_type', 'business_category']),
-            models.Index(fields=['is_public', 'is_active']),
+            models.Index(fields=['theme_type', 'is_active']),
+            models.Index(fields=['is_premium', 'price']),
             models.Index(fields=['usage_count']),
             models.Index(fields=['rating_average']),
         ]
     
     def __str__(self):
-        return f"{self.name_fa} ({self.theme_type})"
-    
-    def get_css_variables(self):
-        """Generate CSS variables for theme customization"""
-        return {
-            '--primary-color': self.primary_color,
-            '--secondary-color': self.secondary_color,
-            '--accent-color': self.accent_color,
-            '--background-color': self.background_color,
-            '--text-color': self.text_color,
-            '--heading-font': self.heading_font,
-            '--body-font': self.body_font,
-        }
-    
-    def get_compiled_css(self):
-        """Get compiled CSS with theme variables"""
-        css_variables = self.get_css_variables()
-        css_vars_string = '\n'.join([f'{key}: {value};' for key, value in css_variables.items()])
-        
-        base_css = f"""
-        :root {{
-            {css_vars_string}
-        }}
-        {self.css_file}
-        """
-        return base_css
+        return self.name_fa
     
     def increment_usage(self):
-        """Increment usage count"""
+        """Increment usage count when theme is applied"""
         self.usage_count += 1
         self.save(update_fields=['usage_count'])
 
 
-class StoreCustomization(StoreOwnedMixin, TimestampMixin):
+class StoreTheme(StoreOwnedMixin, TimestampMixin):
     """
-    Store-specific theme customizations
-    Product requirement: "they can also change it later very simple"
+    Applied theme configuration for a store
+    Product description: "they can also change it later very simple"
     """
-    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
-    theme = models.ForeignKey(
-        StoreTheme, 
-        on_delete=models.CASCADE, 
-        related_name='customizations'
-    )
+    theme = models.ForeignKey(Theme, on_delete=models.PROTECT, verbose_name='قالب')
     
-    # Custom colors (override theme defaults)
-    custom_primary_color = models.CharField(
-        max_length=7, 
-        null=True, 
-        blank=True, 
-        verbose_name='رنگ اصلی سفارشی'
-    )
-    custom_secondary_color = models.CharField(
-        max_length=7, 
-        null=True, 
-        blank=True, 
-        verbose_name='رنگ فرعی سفارشی'
-    )
-    custom_accent_color = models.CharField(
-        max_length=7, 
-        null=True, 
-        blank=True, 
-        verbose_name='رنگ تاکیدی سفارشی'
-    )
-    
-    # Custom fonts
-    custom_heading_font = models.CharField(
-        max_length=50, 
-        null=True, 
-        blank=True, 
-        verbose_name='فونت عناوین سفارشی'
-    )
-    custom_body_font = models.CharField(
-        max_length=50, 
-        null=True, 
-        blank=True, 
-        verbose_name='فونت متن سفارشی'
-    )
-    
-    # Logo and branding
-    logo = models.ImageField(
-        upload_to='store_logos/', 
-        null=True, 
-        blank=True, 
-        verbose_name='لوگو'
-    )
-    favicon = models.ImageField(
-        upload_to='store_favicons/', 
-        null=True, 
-        blank=True, 
-        verbose_name='فیویکان'
-    )
-    
-    # Custom CSS
+    # Customizations
+    custom_colors = models.JSONField(default=dict, verbose_name='رنگ‌های سفارشی')
+    custom_fonts = models.JSONField(default=dict, verbose_name='فونت‌های سفارشی')
+    custom_layout = models.JSONField(default=dict, verbose_name='چیدمان سفارشی')
     custom_css = models.TextField(blank=True, verbose_name='CSS سفارشی')
     
-    # Layout customizations
-    layout_customizations = models.JSONField(default=dict, verbose_name='تنظیمات چیدمان سفارشی')
+    # Logo and branding
+    logo = models.ImageField(upload_to='store_themes/logos/', null=True, blank=True, verbose_name='لوگو')
+    favicon = models.ImageField(upload_to='store_themes/favicons/', null=True, blank=True, verbose_name='فاویکون')
     
-    # Header/Footer customizations
-    custom_header = models.TextField(blank=True, verbose_name='هدر سفارشی')
-    custom_footer = models.TextField(blank=True, verbose_name='فوتر سفارشی')
+    # Header and footer
+    header_config = models.JSONField(default=dict, verbose_name='تنظیمات هدر')
+    footer_config = models.JSONField(default=dict, verbose_name='تنظیمات فوتر')
     
-    # SEO customizations
-    custom_meta_title = models.CharField(
-        max_length=60, 
-        blank=True, 
-        verbose_name='عنوان سفارشی صفحه'
-    )
-    custom_meta_description = models.CharField(
-        max_length=160, 
-        blank=True, 
-        verbose_name='توضیحات سفارشی صفحه'
-    )
+    # Social media links
+    social_links = models.JSONField(default=dict, verbose_name='لینک‌های شبکه اجتماعی')
+    
+    # SEO and meta
+    meta_title = models.CharField(max_length=60, blank=True, verbose_name='عنوان متا')
+    meta_description = models.CharField(max_length=160, blank=True, verbose_name='توضیح متا')
+    meta_keywords = models.CharField(max_length=255, blank=True, verbose_name='کلمات کلیدی')
     
     # Status
     is_active = models.BooleanField(default=True, verbose_name='فعال')
+    is_published = models.BooleanField(default=False, verbose_name='منتشر شده')
+    
+    # Backup of previous theme
+    previous_theme_data = models.JSONField(default=dict, verbose_name='داده‌های قالب قبلی')
     
     class Meta:
-        verbose_name = 'شخصی‌سازی فروشگاه'
-        verbose_name_plural = 'شخصی‌سازی‌های فروشگاه'
+        verbose_name = 'قالب فروشگاه'
+        verbose_name_plural = 'قالب‌های فروشگاه'
         unique_together = ['store']
         indexes = [
             models.Index(fields=['store', 'is_active']),
-            models.Index(fields=['theme']),
+            models.Index(fields=['theme', 'is_published']),
         ]
     
     def __str__(self):
-        return f"شخصی‌سازی {self.store.name}"
+        return f"{self.store.name} - {self.theme.name_fa}"
     
-    def get_effective_colors(self):
-        """Get effective colors with custom overrides"""
-        return {
-            'primary': self.custom_primary_color or self.theme.primary_color,
-            'secondary': self.custom_secondary_color or self.theme.secondary_color,
-            'accent': self.custom_accent_color or self.theme.accent_color,
-            'background': self.theme.background_color,
-            'text': self.theme.text_color,
-        }
-    
-    def get_effective_fonts(self):
-        """Get effective fonts with custom overrides"""
-        return {
-            'heading': self.custom_heading_font or self.theme.heading_font,
-            'body': self.custom_body_font or self.theme.body_font,
-        }
-    
-    def get_compiled_theme_css(self):
-        """Get complete compiled CSS for the store"""
-        colors = self.get_effective_colors()
-        fonts = self.get_effective_fonts()
-        
-        css_variables = {
-            '--primary-color': colors['primary'],
-            '--secondary-color': colors['secondary'],
-            '--accent-color': colors['accent'],
-            '--background-color': colors['background'],
-            '--text-color': colors['text'],
-            '--heading-font': fonts['heading'],
-            '--body-font': fonts['body'],
-        }
-        
-        css_vars_string = '\n'.join([f'{key}: {value};' for key, value in css_variables.items()])
-        
-        compiled_css = f"""
-        :root {{
-            {css_vars_string}
-        }}
-        
-        /* Base theme CSS */
-        {self.theme.css_file}
-        
-        /* Custom CSS */
-        {self.custom_css}
+    def apply_theme(self, theme, custom_options=None):
         """
+        Apply new theme with customizations
+        Product description: "they can also change it later very simple"
+        """
+        # Backup current theme
+        self.previous_theme_data = {
+            'theme_id': str(self.theme.id) if self.theme else None,
+            'custom_colors': self.custom_colors,
+            'custom_fonts': self.custom_fonts,
+            'custom_layout': self.custom_layout,
+            'applied_at': self.updated_at.isoformat() if self.updated_at else None
+        }
         
-        return compiled_css
+        # Apply new theme
+        self.theme = theme
+        if custom_options:
+            self.custom_colors.update(custom_options.get('colors', {}))
+            self.custom_fonts.update(custom_options.get('fonts', {}))
+            self.custom_layout.update(custom_options.get('layout', {}))
+        
+        self.save()
+        
+        # Update theme usage
+        theme.increment_usage()
+    
+    def revert_to_previous_theme(self):
+        """Revert to previous theme configuration"""
+        if self.previous_theme_data.get('theme_id'):
+            try:
+                previous_theme = Theme.objects.get(id=self.previous_theme_data['theme_id'])
+                self.theme = previous_theme
+                self.custom_colors = self.previous_theme_data.get('custom_colors', {})
+                self.custom_fonts = self.previous_theme_data.get('custom_fonts', {})
+                self.custom_layout = self.previous_theme_data.get('custom_layout', {})
+                self.save()
+                return True
+            except Theme.DoesNotExist:
+                pass
+        return False
+    
+    def get_compiled_css(self):
+        """Get complete CSS for the store with customizations"""
+        base_css = self.theme.css_file.read() if self.theme.css_file else ""
+        
+        # Apply color customizations
+        css_variables = []
+        for key, value in self.custom_colors.items():
+            css_variables.append(f"--color-{key}: {value};")
+        
+        # Apply font customizations  
+        for key, value in self.custom_fonts.items():
+            css_variables.append(f"--font-{key}: {value};")
+        
+        custom_css_vars = ":root {\n" + "\n".join(css_variables) + "\n}"
+        
+        return f"{custom_css_vars}\n{base_css}\n{self.custom_css}"
 
 
-class ThemeComponent(TimestampMixin):
-    """
-    Reusable theme components
-    """
-    
-    COMPONENT_TYPES = [
-        ('header', 'هدر'),
-        ('footer', 'فوتر'),
-        ('sidebar', 'نوار کناری'),
-        ('product_card', 'کارت محصول'),
-        ('hero_section', 'بخش قهرمان'),
-        ('testimonial', 'نظرات'),
-        ('contact_form', 'فرم تماس'),
-        ('newsletter', 'خبرنامه'),
-    ]
-    
+class ThemeReview(StoreOwnedMixin, TimestampMixin):
+    """Theme reviews from store owners"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
-    name = models.CharField(max_length=100, verbose_name='نام کامپوننت')
-    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPES, verbose_name='نوع کامپوننت')
+    theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='reviews')
+    rating = models.PositiveIntegerField(choices=[(i, i) for i in range(1, 6)], verbose_name='امتیاز')
+    review_text = models.TextField(blank=True, verbose_name='متن نظر')
     
-    # Component code
-    html_template = models.TextField(verbose_name='قالب HTML')
-    css_styles = models.TextField(blank=True, verbose_name='استایل‌های CSS')
-    javascript_code = models.TextField(blank=True, verbose_name='کد JavaScript')
-    
-    # Configuration
-    config_schema = models.JSONField(default=dict, verbose_name='طرح تنظیمات')
-    default_config = models.JSONField(default=dict, verbose_name='تنظیمات پیش‌فرض')
-    
-    # Preview
-    preview_image = models.ImageField(
-        upload_to='component_previews/', 
-        null=True, 
-        blank=True, 
-        verbose_name='تصویر پیش‌نمایش'
-    )
-    
-    # Status
-    is_active = models.BooleanField(default=True, verbose_name='فعال')
-    usage_count = models.PositiveIntegerField(default=0, verbose_name='تعداد استفاده')
+    # Review metadata
+    is_approved = models.BooleanField(default=False, verbose_name='تأیید شده')
+    is_featured = models.BooleanField(default=False, verbose_name='نظر ویژه')
     
     class Meta:
-        verbose_name = 'کامپوننت قالب'
-        verbose_name_plural = 'کامپوننت‌های قالب'
-        ordering = ['component_type', 'name']
-        indexes = [
-            models.Index(fields=['component_type', 'is_active']),
-            models.Index(fields=['usage_count']),
-        ]
-    
-    def __str__(self):
-        return f"{self.name} ({self.get_component_type_display()})"
-
-
-class StoreThemeRating(StoreOwnedMixin, TimestampMixin):
-    """Theme ratings by store owners"""
-    
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
-    theme = models.ForeignKey(
-        StoreTheme, 
-        on_delete=models.CASCADE, 
-        related_name='ratings'
-    )
-    rating = models.PositiveIntegerField(verbose_name='امتیاز (1-5)')
-    review = models.TextField(blank=True, verbose_name='نظر')
-    
-    class Meta:
-        verbose_name = 'امتیاز قالب'
-        verbose_name_plural = 'امتیازات قالب'
+        verbose_name = 'نظر قالب'
+        verbose_name_plural = 'نظرات قالب'
         unique_together = ['store', 'theme']
         indexes = [
             models.Index(fields=['theme', 'rating']),
+            models.Index(fields=['is_approved', 'is_featured']),
         ]
     
     def __str__(self):
-        return f"امتیاز {self.rating} برای {self.theme.name_fa}"
-    
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # Update theme rating average
-        self.theme.rating_count = self.theme.ratings.count()
-        self.theme.rating_average = self.theme.ratings.aggregate(
-            avg_rating=models.Avg('rating')
-        )['avg_rating'] or 0
-        self.theme.save(update_fields=['rating_count', 'rating_average'])
+        return f"{self.store.name} - {self.theme.name_fa} ({self.rating}⭐)"
 
 
-# Signal handlers for cache management
+# Signal handlers for theme usage tracking
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 
-@receiver([post_save, post_delete], sender=StoreCustomization)
-def clear_theme_cache(sender, instance, **kwargs):
-    """Clear theme cache when customization changes"""
-    cache_key = f"store_theme_{instance.store.id}"
-    cache.delete(cache_key)
+@receiver(post_save, sender=ThemeReview)
+def update_theme_rating(sender, instance, **kwargs):
+    """Update theme rating when review is added/updated"""
+    theme = instance.theme
+    reviews = theme.reviews.filter(is_approved=True)
+    
+    if reviews.exists():
+        theme.rating_average = reviews.aggregate(
+            avg_rating=models.Avg('rating')
+        )['avg_rating']
+        theme.rating_count = reviews.count()
+        theme.save(update_fields=['rating_average', 'rating_count'])
 
-@receiver([post_save, post_delete], sender=StoreTheme)
-def clear_all_theme_cache(sender, instance, **kwargs):
-    """Clear all theme-related cache when theme changes"""
-    # Clear cache for all stores using this theme
-    for customization in instance.customizations.all():
-        cache_key = f"store_theme_{customization.store.id}"
-        cache.delete(cache_key)
+@receiver(post_delete, sender=ThemeReview)
+def update_theme_rating_on_delete(sender, instance, **kwargs):
+    """Update theme rating when review is deleted"""
+    theme = instance.theme
+    reviews = theme.reviews.filter(is_approved=True)
+    
+    if reviews.exists():
+        theme.rating_average = reviews.aggregate(
+            avg_rating=models.Avg('rating')
+        )['avg_rating']
+        theme.rating_count = reviews.count()
+    else:
+        theme.rating_average = 0
+        theme.rating_count = 0
+    
+    theme.save(update_fields=['rating_average', 'rating_count'])
