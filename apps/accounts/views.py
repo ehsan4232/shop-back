@@ -4,157 +4,37 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from django.contrib.auth import authenticate
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.core.cache import cache
 from django.conf import settings
 import logging
 
-from .models import User, OTPVerification, UserSession
-from .serializers import UserSerializer, OTPSerializer
+from .models import UserSession, UserNotification
+from .serializers import UserSerializer
 
+User = get_user_model()
 logger = logging.getLogger(__name__)
+
+# Legacy views for backward compatibility - redirect to new OTP system
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def send_otp(request):
-    """Send OTP code to user's phone number"""
-    phone = request.data.get('phone', '').strip()
-    purpose = request.data.get('purpose', 'login')
-    
-    if not phone:
-        return Response(
-            {'error': 'شماره تلفن الزامی است'}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    # Validate phone number format (Iranian mobile)
-    if not phone.startswith('09') or len(phone) != 11:
-        return Response(
-            {'error': 'شماره تلفن نامعتبر است'}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    # Rate limiting: max 3 OTP requests per phone per hour
-    cache_key = f"otp_rate_limit_{phone}"
-    attempts = cache.get(cache_key, 0)
-    if attempts >= 3:
-        return Response(
-            {'error': 'حد مجاز درخواست کد تأیید. لطفاً یک ساعت دیگر تلاش کنید'}, 
-            status=status.HTTP_429_TOO_MANY_REQUESTS
-        )
-    
-    # Get or create user
-    user, created = User.objects.get_or_create(
-        phone=phone,
-        defaults={
-            'username': phone,  # Required by AbstractUser
-            'is_verified': False
-        }
-    )
-    
-    # Invalidate previous OTP codes
-    OTPVerification.objects.filter(
-        phone=phone,
-        is_used=False,
-        is_verified=False
-    ).update(is_used=True)
-    
-    # Create new OTP
-    otp = OTPVerification.objects.create(
-        user=user,
-        phone=phone,
-        purpose=purpose,
-        ip_address=request.META.get('REMOTE_ADDR'),
-        user_agent=request.META.get('HTTP_USER_AGENT', '')[:500]
-    )
-    
-    # TODO: Implement SMS sending with Kavenegar
-    # For development, log the OTP code
-    if settings.DEBUG:
-        logger.info(f"OTP for {phone}: {otp.otp_code}")
-    
-    # Update rate limiting
-    cache.set(cache_key, attempts + 1, 3600)  # 1 hour
-    
+    """Legacy send OTP - redirect to new OTP system"""
     return Response({
-        'message': 'کد تأیید ارسال شد',
-        'expires_in': 300,  # 5 minutes
-        'can_resend_in': 60  # 1 minute
-    }, status=status.HTTP_200_OK)
+        'message': 'این روش منسوخ شده است. لطفا از /api/v1/send-otp/ استفاده کنید',
+        'redirect_to': '/api/v1/send-otp/'
+    }, status=status.HTTP_301_MOVED_PERMANENTLY)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verify_otp(request):
-    """Verify OTP code and authenticate user"""
-    phone = request.data.get('phone', '').strip()
-    code = request.data.get('code', '').strip()
-    
-    if not phone or not code:
-        return Response(
-            {'error': 'شماره تلفن و کد تأیید الزامی است'}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    try:
-        # Get latest non-used OTP for this phone
-        otp = OTPVerification.objects.filter(
-            phone=phone,
-            is_used=False
-        ).latest('created_at')
-        
-        # Verify the code
-        success, message = otp.verify(code)
-        
-        if success:
-            user = otp.user
-            
-            # Mark user as verified on first successful login
-            if not user.is_verified:
-                user.is_verified = True
-                user.last_login = timezone.now()
-                user.last_login_ip = request.META.get('REMOTE_ADDR')
-                user.save(update_fields=['is_verified', 'last_login', 'last_login_ip'])
-            
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
-            access_token = refresh.access_token
-            
-            # Create user session record
-            session_key = request.session.session_key or 'api_session'
-            device_type = get_device_type(request.META.get('HTTP_USER_AGENT', ''))
-            
-            UserSession.objects.update_or_create(
-                user=user,
-                session_key=session_key,
-                defaults={
-                    'ip_address': request.META.get('REMOTE_ADDR', ''),
-                    'user_agent': request.META.get('HTTP_USER_AGENT', '')[:500],
-                    'device_type': device_type,
-                    'is_active': True,
-                    'last_activity': timezone.now()
-                }
-            )
-            
-            return Response({
-                'access': str(access_token),
-                'refresh': str(refresh),
-                'expires_in': settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(),
-                'user': UserSerializer(user).data,
-                'message': 'ورود موفقیت‌آمیز'
-            }, status=status.HTTP_200_OK)
-        
-        else:
-            return Response(
-                {'error': message}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-    except OTPVerification.DoesNotExist:
-        return Response(
-            {'error': 'کد تأیید یافت نشد یا منقضی شده است'}, 
-            status=status.HTTP_404_NOT_FOUND
-        )
+    """Legacy verify OTP - redirect to new OTP system"""
+    return Response({
+        'message': 'این روش منسوخ شده است. لطفا از /api/v1/verify-otp/ استفاده کنید',
+        'redirect_to': '/api/v1/verify-otp/'
+    }, status=status.HTTP_301_MOVED_PERMANENTLY)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -180,7 +60,7 @@ def logout(request):
         )
     
     except Exception as e:
-        logger.error(f"Logout error for user {request.user.phone}: {e}")
+        logger.error(f"Logout error for user {request.user.phone_number}: {e}")
         return Response(
             {'message': 'خروج موفقیت‌آمیز'}, 
             status=status.HTTP_200_OK
@@ -225,13 +105,12 @@ def user_sessions(request):
     for session in sessions:
         sessions_data.append({
             'id': str(session.id),
-            'device_type': session.device_type,
             'ip_address': session.ip_address,
-            'location': session.location,
             'is_active': session.is_active,
-            'is_current': session.session_key == request.session.session_key,
+            'is_current': session.session_key == getattr(request.session, 'session_key', 'api_session'),
             'last_activity': session.last_activity,
-            'created_at': session.created_at
+            'created_at': session.created_at,
+            'device_info': session.device_info
         })
     
     return Response({
@@ -249,8 +128,7 @@ def revoke_session(request):
             id=session_id,
             user=request.user
         )
-        session.is_active = False
-        session.save()
+        session.revoke()
         
         return Response(
             {'message': 'جلسه لغو شد'}, 
@@ -260,6 +138,58 @@ def revoke_session(request):
     except UserSession.DoesNotExist:
         return Response(
             {'error': 'جلسه یافت نشد'}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def notifications(request):
+    """Get user notifications"""
+    notifications = UserNotification.objects.filter(
+        user=request.user
+    ).order_by('-created_at')[:20]
+    
+    notifications_data = []
+    for notification in notifications:
+        notifications_data.append({
+            'id': str(notification.id),
+            'title': notification.title,
+            'message': notification.message,
+            'notification_type': notification.notification_type,
+            'is_read': notification.is_read,
+            'action_url': notification.action_url,
+            'created_at': notification.created_at
+        })
+    
+    return Response({
+        'notifications': notifications_data,
+        'unread_count': UserNotification.objects.filter(
+            user=request.user, 
+            is_read=False
+        ).count()
+    }, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_notification_read(request):
+    """Mark notification as read"""
+    notification_id = request.data.get('notification_id')
+    
+    try:
+        notification = UserNotification.objects.get(
+            id=notification_id,
+            user=request.user
+        )
+        notification.mark_as_read()
+        
+        return Response(
+            {'message': 'اعلان خوانده شد'}, 
+            status=status.HTTP_200_OK
+        )
+    
+    except UserNotification.DoesNotExist:
+        return Response(
+            {'error': 'اعلان یافت نشد'}, 
             status=status.HTTP_404_NOT_FOUND
         )
 
