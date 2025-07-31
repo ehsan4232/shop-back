@@ -14,16 +14,13 @@ api_v1_patterns = [
     
     # Core Features
     path('products/', include('apps.products.urls')),
-    path('stores/', include('apps.stores.urls')),
+    path('stores/', include('apps.stores.urls')),  # Themes are included in stores
     path('orders/', include('apps.orders.urls')),
     
     # Additional Features
     path('social-media/', include('apps.social_media.urls')),
     path('payments/', include('apps.payments.urls')),
     path('communications/', include('apps.communications.urls')),
-    
-    # New Apps URLs
-    path('themes/', include('apps.themes.urls')),
     path('logistics/', include('apps.logistics.urls')),
     path('analytics/', include('apps.analytics.urls')),
 ]
