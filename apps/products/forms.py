@@ -5,7 +5,23 @@ from apps.products.models import (
     ProductAttributeValue, ProductImage, ProductVariant
 )
 from apps.social_media.models import SocialMediaPost
-from colorfield.widgets import ColorWidget
+
+
+class ColorWidget(forms.TextInput):
+    """
+    Custom color widget to replace external colorfield dependency
+    Product requirement: "Color fields must be presented with colorpads"
+    """
+    template_name = 'widgets/color_input.html'
+    
+    def __init__(self, attrs=None):
+        default_attrs = {
+            'type': 'color',
+            'class': 'color-picker-input'
+        }
+        if attrs:
+            default_attrs.update(attrs)
+        super().__init__(default_attrs)
 
 
 class ProductInstanceCreationForm(forms.ModelForm):
