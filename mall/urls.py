@@ -21,6 +21,11 @@ api_v1_patterns = [
     path('social-media/', include('apps.social_media.urls')),
     path('payments/', include('apps.payments.urls')),
     path('communications/', include('apps.communications.urls')),
+    
+    # New Apps URLs
+    path('themes/', include('apps.themes.urls')),
+    path('logistics/', include('apps.logistics.urls')),
+    path('analytics/', include('apps.analytics.urls')),
 ]
 
 urlpatterns = [
