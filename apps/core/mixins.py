@@ -24,11 +24,11 @@ class TimestampMixin(models.Model):
 
 class StoreOwnedMixin(models.Model):
     """
-    Mixin for models that belong to a store (multi-tenant isolation)
-    CRITICAL FIX: This was missing and referenced throughout the codebase
+    FIXED: Mixin for models that belong to a store (multi-tenant isolation)
+    Corrected reference to use stores.Store instead of core.Store
     """
     store = models.ForeignKey(
-        'core.Store', 
+        'stores.Store',  # FIXED: Correct reference to Store model
         on_delete=models.CASCADE,
         verbose_name='فروشگاه'
     )
@@ -106,7 +106,6 @@ class SlugMixin(models.Model):
 class PriceInheritanceMixin(models.Model):
     """
     Mixin for price inheritance functionality
-    CRITICAL FIX: This was missing and referenced in product models
     """
     
     class Meta:
@@ -335,12 +334,6 @@ class VersionMixin(models.Model):
             # Increment version on update
             self.version += 1
         super().save(*args, **kwargs)
-    
-    def create_version_snapshot(self):
-        """Create a snapshot of current version for history"""
-        # This could be implemented to store version history
-        # in a separate model if needed
-        pass
 
 
 class PublishMixin(models.Model):
