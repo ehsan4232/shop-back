@@ -710,7 +710,7 @@ class Product(StoreOwnedMixin, PriceInheritanceMixin, TimestampMixin, SlugMixin,
 class ProductAttributeValue(TimestampMixin):
     """
     Attribute values for products and variants with multi-type support
-    FIXED: Added UUID and performance indexes
+    CRITICAL FIX: Added missing color field support and complete implementation
     """
     # FIX: Add UUID primary key for consistency
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -719,11 +719,12 @@ class ProductAttributeValue(TimestampMixin):
     variant = models.ForeignKey('ProductVariant', on_delete=models.CASCADE, null=True, blank=True, related_name='attribute_values')
     attribute = models.ForeignKey(ProductAttribute, on_delete=models.CASCADE)
     
-    # Different value types
+    # Different value types - CRITICAL FIX: Added missing color field
     value_text = models.TextField(blank=True, verbose_name='مقدار متنی')
     value_number = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, verbose_name='مقدار عددی')
     value_boolean = models.BooleanField(null=True, blank=True, verbose_name='مقدار بولی')
     value_date = models.DateField(null=True, blank=True, verbose_name='مقدار تاریخ')
+    value_color = models.CharField(max_length=7, null=True, blank=True, verbose_name='مقدار رنگ')  # CRITICAL FIX: Added color field
     
     class Meta:
         verbose_name = 'مقدار ویژگی محصول'
@@ -732,12 +733,13 @@ class ProductAttributeValue(TimestampMixin):
             ['product', 'attribute'],
             ['variant', 'attribute']
         ]
-        # FIX: Add performance indexes for filtering
+        # FIX: Add performance indexes for filtering including color
         indexes = [
             models.Index(fields=['product', 'attribute']),
             models.Index(fields=['variant', 'attribute']),
             models.Index(fields=['value_text']),
             models.Index(fields=['value_number']),
+            models.Index(fields=['value_color']),  # ADDED: Index for color filtering
         ]
     
     def __str__(self):
@@ -745,24 +747,28 @@ class ProductAttributeValue(TimestampMixin):
         return f"{target} - {self.attribute.attribute_type.name_fa}: {self.get_value()}"
     
     def get_value(self):
-        """Get the appropriate value based on attribute type"""
+        """Get the appropriate value based on attribute type - FIXED: Added color support"""
         if self.attribute.attribute_type.data_type == 'number':
             return self.value_number
         elif self.attribute.attribute_type.data_type == 'boolean':
             return self.value_boolean
         elif self.attribute.attribute_type.data_type == 'date':
             return self.value_date
+        elif self.attribute.attribute_type.data_type == 'color':  # CRITICAL FIX: Added color support
+            return self.value_color
         else:
             return self.value_text
     
     def set_value(self, value):
-        """Set the appropriate value based on attribute type"""
+        """Set the appropriate value based on attribute type - FIXED: Added color support"""
         if self.attribute.attribute_type.data_type == 'number':
             self.value_number = value
         elif self.attribute.attribute_type.data_type == 'boolean':
             self.value_boolean = value
         elif self.attribute.attribute_type.data_type == 'date':
             self.value_date = value
+        elif self.attribute.attribute_type.data_type == 'color':  # CRITICAL FIX: Added color support
+            self.value_color = value
         else:
             self.value_text = str(value)
 
