@@ -19,45 +19,115 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,*.mall.ir', cast=lambda v: [s.strip() for s in v.split(',')])
 
-# Application definition
-DJANGO_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'django.contrib.sites',
-]
+# Multi-tenancy configuration - ENHANCED
+USE_TENANT_SCHEMAS = config('USE_TENANT_SCHEMAS', default=True, cast=bool)
 
-THIRD_PARTY_APPS = [
-    'rest_framework',
-    'rest_framework_simplejwt',
-    'corsheaders',
-    'django_filters',
-    'drf_spectacular',
-    'mptt',
-    'django_otp',
-    'storages',
-]
+if USE_TENANT_SCHEMAS:
+    # Multi-tenant setup with django-tenants
+    SHARED_APPS = [
+        'django_tenants',  # Must be first
+        'apps.tenants',
+        
+        # Django core apps (shared across tenants)
+        'django.contrib.contenttypes',
+        'django.contrib.auth',
+        'django.contrib.sessions',
+        'django.contrib.sites',
+        'django.contrib.messages',
+        'django.contrib.admin',
+        'django.contrib.staticfiles',
+        
+        # Third party apps (shared)
+        'rest_framework',
+        'rest_framework_simplejwt',
+        'corsheaders',
+        'django_filters',
+        'drf_spectacular',
+        'mptt',
+        'django_otp',
+        'storages',
+        
+        # Shared apps
+        'apps.accounts',  # User management is shared
+    ]
+    
+    TENANT_APPS = [
+        # Tenant-specific apps (isolated per store)
+        'django.contrib.contenttypes',
+        'django.contrib.auth',
+        'django.contrib.sessions',
+        'django.contrib.admin',
+        
+        'apps.stores',
+        'apps.products',
+        'apps.orders', 
+        'apps.payments',
+        'apps.communications',
+        'apps.social_media',
+    ]
+    
+    INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
+    
+    # Tenant routing
+    DATABASE_ROUTERS = ('django_tenants.routers.TenantSyncRouter',)
+    
+    # Tenant models
+    TENANT_MODEL = "tenants.Tenant" 
+    TENANT_DOMAIN_MODEL = "tenants.Domain"
+    
+    # Public schema configuration
+    PUBLIC_SCHEMA_URLCONF = 'mall.urls_public'
+    SHOW_PUBLIC_IF_NO_TENANT_FOUND = config('SHOW_PUBLIC_IF_NO_TENANT_FOUND', default=False, cast=bool)
+    
+else:
+    # Single-tenant setup (development)
+    DJANGO_APPS = [
+        'django.contrib.admin',
+        'django.contrib.auth',
+        'django.contrib.contenttypes',
+        'django.contrib.sessions',
+        'django.contrib.messages',
+        'django.contrib.staticfiles',
+        'django.contrib.sites',
+    ]
+    
+    THIRD_PARTY_APPS = [
+        'rest_framework',
+        'rest_framework_simplejwt',
+        'corsheaders',
+        'django_filters',
+        'drf_spectacular',
+        'mptt',
+        'django_otp',
+        'storages',
+    ]
+    
+    LOCAL_APPS = [
+        'apps.accounts',
+        'apps.tenants',
+        'apps.stores',
+        'apps.products',
+        'apps.orders',
+        'apps.payments',
+        'apps.communications',
+        'apps.social_media',
+    ]
+    
+    INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-LOCAL_APPS = [
-    'apps.accounts',
-    'apps.stores',
-    'apps.products',
-    'apps.orders',
-    'apps.payments',
-    'apps.communications',
-    'apps.social_media',
-]
-
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
-
+# Middleware configuration
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # Static files
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+]
+
+# Add tenant middleware if multi-tenancy is enabled
+if USE_TENANT_SCHEMAS:
+    MIDDLEWARE.append('django_tenants.middleware.main.TenantMainMiddleware')
+
+MIDDLEWARE.extend([
     'corsheaders.middleware.CorsMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware', 
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -66,14 +136,11 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     
     # Custom middleware
-    'mall.middleware.TenantMiddleware',
     'mall.middleware.StoreContextMiddleware',
-    'mall.middleware.RateLimitMiddleware',
+    'mall.middleware.RateLimitMiddleware', 
     'mall.middleware.SecurityMiddleware',
-    'mall.middleware.CorsMiddleware',
     'mall.middleware.RequestLoggingMiddleware',
-    'mall.middleware.MaintenanceMiddleware',
-]
+])
 
 ROOT_URLCONF = 'mall.urls'
 
@@ -95,10 +162,16 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'mall.wsgi.application'
 
-# Database
+# Database configuration
+if USE_TENANT_SCHEMAS:
+    # Use django-tenants PostgreSQL backend
+    DATABASE_ENGINE = 'django_tenants.postgresql_backend'
+else:
+    DATABASE_ENGINE = 'django.db.backends.postgresql'
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        'ENGINE': DATABASE_ENGINE,
         'NAME': config('DB_NAME', default='mall_db'),
         'USER': config('DB_USER', default='postgres'),
         'PASSWORD': config('DB_PASSWORD', default='password'),
@@ -287,6 +360,12 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@mall.ir')
 KAVENEGAR_API_KEY = config('KAVENEGAR_API_KEY', default='')
 SMS_SENDER = config('SMS_SENDER', default='10008663')
 
+# Social Media API Configuration - ADDED
+TELEGRAM_BOT_TOKEN = config('TELEGRAM_BOT_TOKEN', default='')
+INSTAGRAM_ACCESS_TOKEN = config('INSTAGRAM_ACCESS_TOKEN', default='')
+INSTAGRAM_CLIENT_ID = config('INSTAGRAM_CLIENT_ID', default='')
+INSTAGRAM_CLIENT_SECRET = config('INSTAGRAM_CLIENT_SECRET', default='')
+
 # File Storage
 if not DEBUG:
     # Production file storage (e.g., AWS S3, MinIO)
@@ -344,9 +423,6 @@ if not DEBUG:
 PLATFORM_DOMAIN = config('PLATFORM_DOMAIN', default='mall.ir')
 MAINTENANCE_MODE = config('MAINTENANCE_MODE', default=False, cast=bool)
 
-# Multi-tenancy
-USE_TENANT_SCHEMAS = config('USE_TENANT_SCHEMAS', default=False, cast=bool)
-
 # Logging
 LOGGING = {
     'version': 1,
@@ -400,7 +476,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 OTP_TOTP_ISSUER = 'Mall Platform'
 OTP_LOGIN_URL = '/auth/login/'
 
-# Site ID for Django Sites framework
+# Site ID for Django Sites framework 
 SITE_ID = 1
 
 # Performance Settings
