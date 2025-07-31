@@ -1,707 +1,413 @@
-"""
-Complete Social Media Integration Service
-Provides comprehensive functionality for importing content from social media platforms
-"""
-
+# Complete social media integration services
 import requests
-import re
 import json
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
+import tempfile
+import os
+from typing import List, Dict, Any, Optional
 from django.conf import settings
-from django.core.cache import cache
+from django.core.files.base import ContentFile
 from django.utils import timezone
+from django.core.cache import cache
+from apps.products.models import Product, ProductImage
 import logging
 
-logger = logging.getLogger('mall.social_media')
+logger = logging.getLogger(__name__)
 
+class SocialMediaError(Exception):
+    """Custom exception for social media operations"""
+    pass
 
-class SocialMediaImportService:
-    """
-    Centralized service for importing content from social media platforms
-    Replaces incomplete placeholder implementation
-    """
+class TelegramService:
+    """Service for Telegram integration"""
     
-    @staticmethod
-    def import_content(platform: str, post_id: str, access_token: str = None) -> Dict:
-        """
-        Import content from specified social media platform
+    def __init__(self):
+        self.bot_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
+        self.base_url = f"https://api.telegram.org/bot{self.bot_token}" if self.bot_token else None
         
-        Args:
-            platform: 'telegram' or 'instagram'
-            post_id: Platform-specific post identifier
-            access_token: Required for Instagram, optional for Telegram
-        
-        Returns:
-            Dict containing extracted content
-        """
-        try:
-            if platform == 'telegram':
-                return TelegramImportService.import_post(post_id)
-            elif platform == 'instagram':
-                return InstagramImportService.import_post(post_id, access_token)
-            else:
-                raise ValueError(f"Unsupported platform: {platform}")
-        except Exception as e:
-            logger.error(f"Failed to import from {platform}: {str(e)}")
-            raise
-
-
-class TelegramImportService:
-    """
-    Service for importing content from Telegram channels/groups
-    """
+        if not self.bot_token:
+            logger.warning("Telegram bot token not configured")
     
-    TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}"
-    
-    @classmethod
-    def import_post(cls, post_identifier: str, bot_token: str = None) -> Dict:
-        """
-        Import content from Telegram post
+    def _make_request(self, method: str, params: Dict = None) -> Dict:
+        """Make authenticated request to Telegram API"""
+        if not self.base_url:
+            raise SocialMediaError("Telegram bot token not configured")
         
-        Args:
-            post_identifier: Format "@channel_username/message_id" or "channel_id/message_id"
-            bot_token: Telegram bot token (from settings if not provided)
-        
-        Returns:
-            Dict with extracted content
-        """
-        if not bot_token:
-            bot_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
-            if not bot_token:
-                raise ValueError("Telegram bot token not configured")
-        
-        # Parse post identifier
-        channel, message_id = cls._parse_post_identifier(post_identifier)
-        
-        # Get message content
-        api_url = cls.TELEGRAM_API_BASE.format(token=bot_token)
+        url = f"{self.base_url}/{method}"
         
         try:
-            # Get channel info first
-            channel_info = cls._get_channel_info(api_url, channel)
-            
-            # Get message content
-            message_data = cls._get_message(api_url, channel, message_id)
-            
-            # Extract content
-            extracted_content = cls._extract_content(message_data, channel_info)
-            
-            return {
-                'platform': 'telegram',
-                'post_id': post_identifier,
-                'success': True,
-                'content': extracted_content,
-                'imported_at': timezone.now().isoformat()
-            }
-            
+            response = requests.get(url, params=params or {}, timeout=30)
+            response.raise_for_status()
+            return response.json()
         except requests.RequestException as e:
-            logger.error(f"Telegram API request failed: {str(e)}")
-            raise ValueError(f"Failed to fetch Telegram content: {str(e)}")
+            logger.error(f"Telegram API error: {str(e)}")
+            raise SocialMediaError(f"Telegram API request failed: {str(e)}")
     
-    @staticmethod
-    def _parse_post_identifier(identifier: str) -> Tuple[str, int]:
-        """Parse Telegram post identifier"""
-        parts = identifier.split('/')
-        if len(parts) != 2:
-            raise ValueError("Invalid Telegram post identifier format")
-        
-        channel = parts[0].replace('@', '')
+    def get_channel_info(self, channel_username: str) -> Dict:
+        """Get channel information"""
         try:
-            message_id = int(parts[1])
-        except ValueError:
-            raise ValueError("Invalid message ID")
-        
-        return channel, message_id
+            result = self._make_request('getChat', {
+                'chat_id': f"@{channel_username.lstrip('@')}"
+            })
+            return result.get('result', {})
+        except SocialMediaError:
+            return {}
     
-    @staticmethod
-    def _get_channel_info(api_url: str, channel: str) -> Dict:
-        """Get Telegram channel information"""
-        response = requests.get(f"{api_url}/getChat", params={
-            'chat_id': f"@{channel}" if not channel.startswith('-') else channel
-        })
-        response.raise_for_status()
+    def get_channel_posts(self, channel_username: str, limit: int = 5) -> List[Dict]:
+        """
+        Get recent posts from Telegram channel
+        Note: This requires the bot to be admin of the channel or use unofficial APIs
+        """
+        # Cache key for rate limiting
+        cache_key = f"telegram_posts_{channel_username}_{limit}"
+        cached_posts = cache.get(cache_key)
         
-        data = response.json()
-        if not data['ok']:
-            raise ValueError(f"Telegram API error: {data.get('description', 'Unknown error')}")
+        if cached_posts:
+            return cached_posts
         
-        return data['result']
+        try:
+            # For public channels, we can use getUpdates with specific chat_id
+            # This is a simplified implementation - in production, use Telegram Bot API properly
+            
+            # Alternative: Use MTProto API or scraping (requires different approach)
+            posts = self._get_channel_posts_via_updates(channel_username, limit)
+            
+            # Cache for 15 minutes
+            cache.set(cache_key, posts, timeout=900)
+            return posts
+            
+        except Exception as e:
+            logger.error(f"Error fetching Telegram posts: {str(e)}")
+            return []
     
-    @staticmethod
-    def _get_message(api_url: str, channel: str, message_id: int) -> Dict:
-        """Get specific message from Telegram"""
-        # Note: This is a simplified implementation
-        # In practice, you might need to use different endpoints or methods
-        response = requests.get(f"{api_url}/getUpdates", params={
-            'limit': 100
-        })
-        response.raise_for_status()
-        
-        data = response.json()
-        if not data['ok']:
-            raise ValueError(f"Telegram API error: {data.get('description', 'Unknown error')}")
-        
-        # Find the specific message
-        for update in data['result']:
-            if 'message' in update:
-                message = update['message']
-                if message.get('message_id') == message_id:
-                    return update
-        
-        raise ValueError("Message not found")
+    def _get_channel_posts_via_updates(self, channel_username: str, limit: int) -> List[Dict]:
+        """Get posts using getUpdates method (limited functionality)"""
+        try:
+            updates = self._make_request('getUpdates', {
+                'limit': limit * 2,  # Get more to filter channel posts
+                'allowed_updates': json.dumps(['channel_post'])
+            })
+            
+            posts = []
+            for update in updates.get('result', []):
+                if 'channel_post' in update:
+                    post = update['channel_post']
+                    if post.get('chat', {}).get('username') == channel_username.lstrip('@'):
+                        posts.append({
+                            'id': post.get('message_id'),
+                            'text': post.get('text', ''),
+                            'caption': post.get('caption', ''),
+                            'date': post.get('date'),
+                            'media': self._extract_media_from_post(post),
+                            'platform': 'telegram'
+                        })
+                        
+                        if len(posts) >= limit:
+                            break
+            
+            return posts[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error processing Telegram updates: {str(e)}")
+            return []
     
-    @staticmethod
-    def _extract_content(message_data: Dict, channel_info: Dict) -> Dict:
-        """Extract product-relevant content from Telegram message"""
-        message = message_data.get('message', {})
-        
-        # Extract text content
-        text_content = message.get('text', '') or message.get('caption', '')
-        
-        # Extract media
-        media_files = []
+    def _extract_media_from_post(self, post: Dict) -> List[Dict]:
+        """Extract media URLs from Telegram post"""
+        media = []
         
         # Handle photos
-        if 'photo' in message:
-            photos = message['photo']
-            # Get highest resolution photo
-            best_photo = max(photos, key=lambda p: p.get('file_size', 0))
-            media_files.append({
+        if 'photo' in post:
+            # Get the largest photo size
+            photo = max(post['photo'], key=lambda x: x.get('file_size', 0))
+            media.append({
                 'type': 'photo',
-                'file_id': best_photo['file_id'],
-                'file_size': best_photo.get('file_size', 0)
+                'file_id': photo.get('file_id'),
+                'file_size': photo.get('file_size')
             })
         
         # Handle videos
-        if 'video' in message:
-            video = message['video']
-            media_files.append({
+        if 'video' in post:
+            media.append({
                 'type': 'video',
-                'file_id': video['file_id'],
-                'file_size': video.get('file_size', 0),
-                'duration': video.get('duration', 0)
+                'file_id': post['video'].get('file_id'),
+                'duration': post['video'].get('duration'),
+                'file_size': post['video'].get('file_size')
             })
         
         # Handle documents (could be images/videos)
-        if 'document' in message:
-            doc = message['document']
-            mime_type = doc.get('mime_type', '')
-            if mime_type.startswith('image/') or mime_type.startswith('video/'):
-                media_files.append({
-                    'type': 'document',
-                    'file_id': doc['file_id'],
-                    'file_name': doc.get('file_name', ''),
-                    'mime_type': mime_type,
-                    'file_size': doc.get('file_size', 0)
-                })
-        
-        # Extract product information using basic NLP
-        product_info = TelegramContentAnalyzer.analyze_product_content(text_content)
-        
-        return {
-            'text': text_content,
-            'media_files': media_files,
-            'channel_info': {
-                'title': channel_info.get('title', ''),
-                'username': channel_info.get('username', ''),
-                'description': channel_info.get('description', '')
-            },
-            'message_date': message.get('date'),
-            'product_info': product_info,
-            'hashtags': TelegramContentAnalyzer.extract_hashtags(text_content),
-            'mentions': TelegramContentAnalyzer.extract_mentions(text_content)
-        }
-
-
-class InstagramImportService:
-    """
-    Service for importing content from Instagram using Basic Display API
-    """
-    
-    INSTAGRAM_API_BASE = "https://graph.instagram.com"
-    
-    @classmethod
-    def import_post(cls, media_id: str, access_token: str) -> Dict:
-        """
-        Import content from Instagram post
-        
-        Args:
-            media_id: Instagram media ID
-            access_token: Instagram Basic Display API access token
-        
-        Returns:
-            Dict with extracted content
-        """
-        try:
-            # Get media details
-            media_data = cls._get_media_details(media_id, access_token)
-            
-            # Extract content
-            extracted_content = cls._extract_content(media_data)
-            
-            return {
-                'platform': 'instagram',
-                'post_id': media_id,
-                'success': True,
-                'content': extracted_content,
-                'imported_at': timezone.now().isoformat()
-            }
-            
-        except requests.RequestException as e:
-            logger.error(f"Instagram API request failed: {str(e)}")
-            raise ValueError(f"Failed to fetch Instagram content: {str(e)}")
-    
-    @staticmethod
-    def _get_media_details(media_id: str, access_token: str) -> Dict:
-        """Get Instagram media details"""
-        url = f"{InstagramImportService.INSTAGRAM_API_BASE}/{media_id}"
-        params = {
-            'fields': 'id,media_type,media_url,caption,permalink,timestamp',
-            'access_token': access_token
-        }
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        
-        data = response.json()
-        if 'error' in data:
-            raise ValueError(f"Instagram API error: {data['error']['message']}")
-        
-        return data
-    
-    @staticmethod
-    def _extract_content(media_data: Dict) -> Dict:
-        """Extract product-relevant content from Instagram media"""
-        caption = media_data.get('caption', '')
-        media_url = media_data.get('media_url', '')
-        media_type = media_data.get('media_type', '')
-        
-        # Analyze caption for product information
-        product_info = InstagramContentAnalyzer.analyze_product_content(caption)
-        
-        return {
-            'caption': caption,
-            'media_url': media_url,
-            'media_type': media_type,
-            'permalink': media_data.get('permalink', ''),
-            'timestamp': media_data.get('timestamp', ''),
-            'product_info': product_info,
-            'hashtags': InstagramContentAnalyzer.extract_hashtags(caption),
-            'mentions': InstagramContentAnalyzer.extract_mentions(caption)
-        }
-
-
-class TelegramContentAnalyzer:
-    """
-    Analyzer for extracting product information from Telegram content
-    """
-    
-    @staticmethod
-    def analyze_product_content(text: str) -> Dict:
-        """
-        Analyze text content to extract product information
-        Uses Persian NLP and pattern matching
-        """
-        if not text:
-            return {}
-        
-        # Basic product information extraction
-        product_info = {
-            'potential_name': '',
-            'potential_price': None,
-            'potential_brand': '',
-            'potential_features': [],
-            'potential_categories': []
-        }
-        
-        # Extract potential product name (first line or prominent text)
-        lines = text.split('\n')
-        if lines:
-            product_info['potential_name'] = lines[0].strip()
-        
-        # Extract price patterns
-        price_patterns = [
-            r'قیمت[:\s]*(\d+[,\d]*)\s*تومان',
-            r'(\d+[,\d]*)\s*تومان',
-            r'(\d+[,\d]*)\s*ت',
-            r'💰[:\s]*(\d+[,\d]*)',
-        ]
-        
-        for pattern in price_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                price_str = matches[0].replace(',', '')
-                try:
-                    product_info['potential_price'] = int(price_str)
-                    break
-                except ValueError:
-                    continue
-        
-        # Extract features (lines starting with emojis or bullets)
-        feature_patterns = [
-            r'[✅✔️🔸🔹▪️▫️•]\s*([^\n]+)',
-            r'[🔴🟠🟡🟢🔵🟣]\s*([^\n]+)',
-            r'[📱💻⌚🎧]\s*([^\n]+)'
-        ]
-        
-        for pattern in feature_patterns:
-            features = re.findall(pattern, text)
-            product_info['potential_features'].extend(features)
-        
-        # Extract brand mentions (common Persian/English brands)
-        brand_patterns = [
-            r'برند[:\s]*([^\n\s]+)',
-            r'(اپل|سامسونگ|شیائومی|هواوی|الجی|سونی)',
-            r'(Apple|Samsung|Xiaomi|Huawei|LG|Sony)',
-            r'Brand[:\s]*([^\n\s]+)'
-        ]
-        
-        for pattern in brand_patterns:
-            brands = re.findall(pattern, text, re.IGNORECASE)
-            if brands:
-                product_info['potential_brand'] = brands[0]
-                break
-        
-        return product_info
-    
-    @staticmethod
-    def extract_hashtags(text: str) -> List[str]:
-        """Extract hashtags from text"""
-        return re.findall(r'#([^\s#]+)', text)
-    
-    @staticmethod
-    def extract_mentions(text: str) -> List[str]:
-        """Extract mentions from text"""
-        return re.findall(r'@([^\s@]+)', text)
-
-
-class InstagramContentAnalyzer:
-    """
-    Analyzer for extracting product information from Instagram content
-    """
-    
-    @staticmethod
-    def analyze_product_content(caption: str) -> Dict:
-        """
-        Analyze Instagram caption to extract product information
-        """
-        if not caption:
-            return {}
-        
-        # Use similar logic to Telegram but adapted for Instagram format
-        product_info = {
-            'potential_name': '',
-            'potential_price': None,
-            'potential_brand': '',
-            'potential_features': [],
-            'potential_categories': []
-        }
-        
-        # Instagram-specific price patterns
-        price_patterns = [
-            r'Price[:\s]*\$?(\d+[,\d]*)',
-            r'قیمت[:\s]*(\d+[,\d]*)\s*تومان',
-            r'(\d+[,\d]*)\s*تومان',
-            r'💰[:\s]*(\d+[,\d]*)',
-        ]
-        
-        for pattern in price_patterns:
-            matches = re.findall(pattern, caption, re.IGNORECASE)
-            if matches:
-                price_str = matches[0].replace(',', '')
-                try:
-                    product_info['potential_price'] = int(price_str)
-                    break
-                except ValueError:
-                    continue
-        
-        # Extract product name from beginning of caption
-        lines = caption.split('\n')
-        if lines:
-            first_line = lines[0].strip()
-            # Remove excessive emojis and hashtags for cleaner name
-            clean_name = re.sub(r'[#@][\w]+', '', first_line)
-            clean_name = re.sub(r'[^\w\s\u0600-\u06FF]', ' ', clean_name)
-            product_info['potential_name'] = clean_name.strip()
-        
-        return product_info
-    
-    @staticmethod
-    def extract_hashtags(caption: str) -> List[str]:
-        """Extract hashtags from Instagram caption"""
-        return re.findall(r'#([^\s#]+)', caption)
-    
-    @staticmethod
-    def extract_mentions(caption: str) -> List[str]:
-        """Extract mentions from Instagram caption"""
-        return re.findall(r'@([^\s@]+)', caption)
-
-
-class MediaDownloadService:
-    """
-    Service for downloading and storing media files from social media
-    """
-    
-    @staticmethod
-    def download_telegram_media(file_id: str, bot_token: str) -> Optional[str]:
-        """
-        Download media file from Telegram and store it
-        
-        Returns:
-            Path to stored file or None if failed
-        """
-        try:
-            # Get file path from Telegram
-            api_url = f"https://api.telegram.org/bot{bot_token}"
-            file_response = requests.get(f"{api_url}/getFile", params={'file_id': file_id})
-            file_response.raise_for_status()
-            
-            file_data = file_response.json()
-            if not file_data['ok']:
-                return None
-            
-            file_path = file_data['result']['file_path']
-            
-            # Download the actual file
-            download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-            media_response = requests.get(download_url)
-            media_response.raise_for_status()
-            
-            # Generate filename
-            filename = f"telegram_{file_id}_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
-            if '.' in file_path:
-                extension = file_path.split('.')[-1]
-                filename += f".{extension}"
-            
-            # Store file
-            file_content = ContentFile(media_response.content)
-            stored_path = default_storage.save(f"social_media/{filename}", file_content)
-            
-            return stored_path
-            
-        except Exception as e:
-            logger.error(f"Failed to download Telegram media {file_id}: {str(e)}")
-            return None
-    
-    @staticmethod
-    def download_instagram_media(media_url: str) -> Optional[str]:
-        """
-        Download media file from Instagram and store it
-        
-        Returns:
-            Path to stored file or None if failed
-        """
-        try:
-            response = requests.get(media_url, timeout=30)
-            response.raise_for_status()
-            
-            # Generate filename
-            filename = f"instagram_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            # Determine file extension from URL or content type
-            if '.' in media_url and len(media_url.split('.')[-1].split('?')[0]) <= 4:
-                extension = media_url.split('.')[-1].split('?')[0]
-            else:
-                content_type = response.headers.get('content-type', '')
-                if 'image' in content_type:
-                    extension = 'jpg'
-                elif 'video' in content_type:
-                    extension = 'mp4'
-                else:
-                    extension = 'bin'
-            
-            filename += f".{extension}"
-            
-            # Store file
-            file_content = ContentFile(response.content)
-            stored_path = default_storage.save(f"social_media/{filename}", file_content)
-            
-            return stored_path
-            
-        except Exception as e:
-            logger.error(f"Failed to download Instagram media {media_url}: {str(e)}")
-            return None
-
-
-class ProductCreationService:
-    """
-    Service for creating products from social media content
-    """
-    
-    @staticmethod
-    def create_product_from_social_media(
-        store,
-        product_class,
-        category,
-        social_content: Dict,
-        additional_data: Dict = None
-    ):
-        """
-        Create a product from imported social media content
-        
-        Args:
-            store: Store instance
-            product_class: ProductClass instance (must be leaf)
-            category: ProductCategory instance
-            social_content: Extracted content from social media
-            additional_data: Additional product data
-        
-        Returns:
-            Created Product instance
-        """
-        from apps.products.models import Product, ProductImage
-        from apps.core.validation import ProductValidationService
-        
-        # Validate inputs
-        ProductValidationService.validate_product_class_hierarchy(
-            product_class_id=str(product_class.id),
-            category_id=str(category.id),
-            store_id=str(store.id)
-        )
-        
-        # Extract product information
-        product_info = social_content.get('product_info', {})
-        
-        # Prepare product data
-        product_data = {
-            'store': store,
-            'product_class': product_class,
-            'category': category,
-            'name': product_info.get('potential_name', 'محصول وارد شده از شبکه اجتماعی')[:100],
-            'name_fa': product_info.get('potential_name', 'محصول وارد شده از شبکه اجتماعی')[:100],
-            'description': social_content.get('text', social_content.get('caption', '')),
-            'base_price': product_info.get('potential_price', 0),
-            'imported_from_social': True,
-            'social_media_source': social_content.get('platform'),
-            'social_media_post_id': social_content.get('post_id'),
-            'status': 'draft',  # Requires manual review
-        }
-        
-        # Add brand if detected
-        if product_info.get('potential_brand'):
-            from apps.products.models import Brand
-            brand, created = Brand.objects.get_or_create(
-                store=store,
-                name_fa=product_info['potential_brand'],
-                defaults={'name': product_info['potential_brand']}
-            )
-            product_data['brand'] = brand
-        
-        # Merge additional data
-        if additional_data:
-            product_data.update(additional_data)
-        
-        # Create product
-        product = Product.objects.create(**product_data)
-        
-        # Handle media files
-        media_files = social_content.get('media_files', [])
-        if social_content.get('media_url'):  # Instagram
-            media_files.append({
-                'type': 'image',
-                'url': social_content['media_url']
+        if 'document' in post:
+            media.append({
+                'type': 'document',
+                'file_id': post['document'].get('file_id'),
+                'file_name': post['document'].get('file_name'),
+                'mime_type': post['document'].get('mime_type'),
+                'file_size': post['document'].get('file_size')
             })
         
-        # Download and attach media
-        for i, media in enumerate(media_files[:5]):  # Limit to 5 media files
-            if media.get('file_id'):  # Telegram
-                bot_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
-                if bot_token:
-                    stored_path = MediaDownloadService.download_telegram_media(
-                        media['file_id'], bot_token
-                    )
-                    if stored_path:
-                        ProductImage.objects.create(
-                            product=product,
-                            image=stored_path,
-                            is_featured=(i == 0),
-                            imported_from_social=True,
-                            social_media_url=social_content.get('permalink', '')
-                        )
-            
-            elif media.get('url'):  # Instagram or direct URL
-                stored_path = MediaDownloadService.download_instagram_media(media['url'])
-                if stored_path:
-                    ProductImage.objects.create(
-                        product=product,
-                        image=stored_path,
-                        is_featured=(i == 0),
-                        imported_from_social=True,
-                        social_media_url=social_content.get('permalink', '')
-                    )
-        
-        return product
-
-
-# Celery tasks for background processing
-try:
-    from celery import shared_task
+        return media
     
-    @shared_task
-    def import_social_media_content_task(platform: str, post_id: str, access_token: str = None):
-        """
-        Background task to import social media content
-        """
+    def download_file(self, file_id: str) -> Optional[bytes]:
+        """Download file from Telegram servers"""
         try:
-            content = SocialMediaImportService.import_content(platform, post_id, access_token)
-            return {
-                'success': True,
-                'platform': platform,
-                'post_id': post_id,
-                'content': content
-            }
+            # Get file path
+            file_info = self._make_request('getFile', {'file_id': file_id})
+            file_path = file_info.get('result', {}).get('file_path')
+            
+            if not file_path:
+                return None
+            
+            # Download file
+            download_url = f"https://api.telegram.org/file/bot{self.bot_token}/{file_path}"
+            response = requests.get(download_url, timeout=60)
+            response.raise_for_status()
+            
+            return response.content
+            
         except Exception as e:
-            logger.error(f"Failed to import {platform} content {post_id}: {str(e)}")
-            return {
-                'success': False,
-                'error': str(e),
-                'platform': platform,
-                'post_id': post_id
-            }
+            logger.error(f"Error downloading Telegram file {file_id}: {str(e)}")
+            return None
+
+class InstagramService:
+    """Service for Instagram Basic Display API integration"""
     
-    @shared_task
-    def create_product_from_social_task(
-        store_id: str,
-        product_class_id: str,
-        category_id: str,
-        social_content: Dict,
-        additional_data: Dict = None
-    ):
-        """
-        Background task to create product from social media content
-        """
+    def __init__(self):
+        self.access_token = getattr(settings, 'INSTAGRAM_ACCESS_TOKEN', None)
+        self.base_url = "https://graph.instagram.com"
+        
+        if not self.access_token:
+            logger.warning("Instagram access token not configured")
+    
+    def _make_request(self, endpoint: str, params: Dict = None) -> Dict:
+        """Make authenticated request to Instagram API"""
+        if not self.access_token:
+            raise SocialMediaError("Instagram access token not configured")
+        
+        url = f"{self.base_url}/{endpoint}"
+        params = params or {}
+        params['access_token'] = self.access_token
+        
         try:
-            from apps.stores.models import Store
-            from apps.products.models import ProductClass, ProductCategory
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logger.error(f"Instagram API error: {str(e)}")
+            raise SocialMediaError(f"Instagram API request failed: {str(e)}")
+    
+    def get_user_media(self, user_id: str = 'me', limit: int = 5) -> List[Dict]:
+        """Get user's recent media posts"""
+        cache_key = f"instagram_media_{user_id}_{limit}"
+        cached_media = cache.get(cache_key)
+        
+        if cached_media:
+            return cached_media
+        
+        try:
+            result = self._make_request(f"{user_id}/media", {
+                'fields': 'id,caption,media_type,media_url,thumbnail_url,timestamp,permalink',
+                'limit': limit
+            })
             
-            store = Store.objects.get(id=store_id)
-            product_class = ProductClass.objects.get(id=product_class_id)
-            category = ProductCategory.objects.get(id=category_id)
+            media_list = []
+            for item in result.get('data', []):
+                media_list.append({
+                    'id': item.get('id'),
+                    'caption': item.get('caption', ''),
+                    'media_type': item.get('media_type'),
+                    'media_url': item.get('media_url'),
+                    'thumbnail_url': item.get('thumbnail_url'),
+                    'timestamp': item.get('timestamp'),
+                    'permalink': item.get('permalink'),
+                    'platform': 'instagram'
+                })
             
-            product = ProductCreationService.create_product_from_social_media(
-                store=store,
-                product_class=product_class,
-                category=category,
-                social_content=social_content,
-                additional_data=additional_data
+            # Cache for 30 minutes
+            cache.set(cache_key, media_list, timeout=1800)
+            return media_list
+            
+        except SocialMediaError as e:
+            logger.error(f"Error fetching Instagram media: {str(e)}")
+            return []
+
+class SocialMediaImporter:
+    """Main service for importing content from social media platforms"""
+    
+    def __init__(self):
+        self.telegram = TelegramService()
+        self.instagram = InstagramService()
+    
+    def get_platform_content(self, platform: str, source_id: str, limit: int = 5) -> List[Dict]:
+        """Get content from specified platform"""
+        if platform.lower() == 'telegram':
+            return self.telegram.get_channel_posts(source_id, limit)
+        elif platform.lower() == 'instagram':
+            return self.instagram.get_user_media(source_id, limit)
+        else:
+            raise SocialMediaError(f"Unsupported platform: {platform}")
+    
+    def import_content_to_product(self, product: Product, platform: str, content_data: List[Dict]) -> Dict:
+        """
+        Import social media content to product
+        Returns summary of imported items
+        """
+        imported_images = []
+        imported_texts = []
+        errors = []
+        
+        for item in content_data:
+            try:
+                # Import text content
+                text_content = item.get('caption') or item.get('text', '')
+                if text_content:
+                    imported_texts.append({
+                        'content': text_content[:500],  # Limit length
+                        'source_id': item.get('id'),
+                        'platform': platform,
+                        'timestamp': item.get('timestamp') or item.get('date')
+                    })
+                
+                # Import media
+                if platform == 'instagram':
+                    media_url = item.get('media_url')
+                    if media_url and item.get('media_type') in ['IMAGE', 'CAROUSEL_ALBUM']:
+                        image = self._download_and_save_image(
+                            product, media_url, platform, item.get('id')
+                        )
+                        if image:
+                            imported_images.append(image)
+                
+                elif platform == 'telegram':
+                    for media_item in item.get('media', []):
+                        if media_item.get('type') == 'photo':
+                            file_content = self.telegram.download_file(media_item.get('file_id'))
+                            if file_content:
+                                image = self._save_image_from_content(
+                                    product, file_content, platform, 
+                                    f"{item.get('id')}_{media_item.get('file_id')}"
+                                )
+                                if image:
+                                    imported_images.append(image)
+                
+            except Exception as e:
+                logger.error(f"Error importing item {item.get('id')}: {str(e)}")
+                errors.append(str(e))
+        
+        # Update product social media data
+        if imported_images or imported_texts:
+            self._update_product_social_data(product, platform, {
+                'imported_images': len(imported_images),
+                'imported_texts': len(imported_texts),
+                'last_import': timezone.now().isoformat(),
+                'errors': errors
+            })
+        
+        return {
+            'success': True,
+            'imported_images': len(imported_images),
+            'imported_texts': len(imported_texts),
+            'errors': errors,
+            'total_processed': len(content_data)
+        }
+    
+    def _download_and_save_image(self, product: Product, url: str, platform: str, source_id: str) -> Optional[ProductImage]:
+        """Download image from URL and save to product"""
+        try:
+            response = requests.get(url, timeout=60)
+            response.raise_for_status()
+            
+            return self._save_image_from_content(product, response.content, platform, source_id)
+            
+        except Exception as e:
+            logger.error(f"Error downloading image from {url}: {str(e)}")
+            return None
+    
+    def _save_image_from_content(self, product: Product, content: bytes, platform: str, source_id: str) -> Optional[ProductImage]:
+        """Save image content to ProductImage model"""
+        try:
+            # Create ProductImage instance
+            product_image = ProductImage(
+                product=product,
+                alt_text=f"Imported from {platform} - {source_id}"[:200],
+                imported_from_social=True,
+                social_media_url=f"{platform}://{source_id}"
             )
             
-            return {
-                'success': True,
-                'product_id': str(product.id),
-                'product_name': product.name_fa
-            }
-        
+            # Save image file
+            filename = f"social_{platform}_{source_id}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            product_image.image.save(
+                filename,
+                ContentFile(content),
+                save=False
+            )
+            
+            product_image.save()
+            return product_image
+            
         except Exception as e:
-            logger.error(f"Failed to create product from social media: {str(e)}")
+            logger.error(f"Error saving image for product {product.id}: {str(e)}")
+            return None
+    
+    def _update_product_social_data(self, product: Product, platform: str, import_data: Dict):
+        """Update product's social media data"""
+        try:
+            if not product.social_media_data:
+                product.social_media_data = {}
+            
+            if platform not in product.social_media_data:
+                product.social_media_data[platform] = {}
+            
+            product.social_media_data[platform].update(import_data)
+            product.imported_from_social = True
+            product.social_media_source = platform
+            product.last_social_import = timezone.now()
+            
+            product.save(update_fields=[
+                'social_media_data', 'imported_from_social', 
+                'social_media_source', 'last_social_import'
+            ])
+            
+        except Exception as e:
+            logger.error(f"Error updating product social data: {str(e)}")
+
+# Convenience function for easy import
+def import_social_media_content(product_id: str, platform: str, source_id: str, limit: int = 5) -> Dict:
+    """
+    Convenience function to import social media content for a product
+    
+    Args:
+        product_id: UUID of the product
+        platform: 'telegram' or 'instagram'
+        source_id: Channel username for Telegram, user ID for Instagram
+        limit: Number of posts to import (default 5)
+    
+    Returns:
+        Dict with import results
+    """
+    try:
+        product = Product.objects.get(id=product_id)
+        importer = SocialMediaImporter()
+        
+        # Get content from platform
+        content = importer.get_platform_content(platform, source_id, limit)
+        
+        if not content:
             return {
                 'success': False,
-                'error': str(e)
+                'error': f'No content found from {platform} source: {source_id}'
             }
-
-except ImportError:
-    # Celery not available
-    pass
+        
+        # Import content to product
+        result = importer.import_content_to_product(product, platform, content)
+        
+        return result
+        
+    except Product.DoesNotExist:
+        return {
+            'success': False,
+            'error': f'Product with ID {product_id} not found'
+        }
+    except Exception as e:
+        logger.error(f"Error in import_social_media_content: {str(e)}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
