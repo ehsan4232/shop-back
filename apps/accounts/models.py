@@ -1,212 +1,182 @@
-from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.core.validators import RegexValidator
-from django.utils import timezone
-from apps.accounts.otp_models import User, UserProfile, OTPCode, LoginAttempt
+from apps.core.mixins import TimestampMixin
 import uuid
 
-# Re-export from otp_models to maintain compatibility
-__all__ = ['User', 'UserProfile', 'OTPCode', 'LoginAttempt']
 
-# Additional models that weren't in otp_models
-
-class UserSession(models.Model):
+class OTPCode(TimestampMixin):
     """
-    Track user sessions for security and analytics
+    OTP codes for phone-based authentication
+    Product description requirement: "All logins in the platform are with otp"
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sessions')
-    session_key = models.CharField(max_length=40, unique=True)
-    ip_address = models.GenericIPAddressField()
-    user_agent = models.TextField(blank=True)
-    device_info = models.JSONField(default=dict, blank=True)
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    last_activity = models.DateTimeField(auto_now=True)
-    expires_at = models.DateTimeField()
-
-    class Meta:
-        verbose_name = "جلسه کاربر"
-        verbose_name_plural = "جلسات کاربران"
-        ordering = ['-last_activity']
-        indexes = [
-            models.Index(fields=['user', 'is_active']),
-            models.Index(fields=['session_key']),
-            models.Index(fields=['expires_at']),
-            models.Index(fields=['ip_address']),
-        ]
-
-    def __str__(self):
-        return f"{self.user.first_name} - {self.ip_address}"
-
-    def is_expired(self):
-        return timezone.now() > self.expires_at
-
-    def revoke(self):
-        self.is_active = False
-        self.save(update_fields=['is_active'])
-
-
-class UserNotification(models.Model):
-    """
-    User notifications system
-    """
-    NOTIFICATION_TYPES = [
-        ('order', 'سفارش'),
-        ('payment', 'پرداخت'),
-        ('promotion', 'تخفیف'),
-        ('system', 'سیستم'),
-        ('store', 'فروشگاه'),
-    ]
     
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
-    title = models.CharField(max_length=200, verbose_name="عنوان")
-    message = models.TextField(verbose_name="پیام")
-    notification_type = models.CharField(
-        max_length=20, 
-        choices=NOTIFICATION_TYPES, 
-        default='system',
-        verbose_name="نوع اعلان"
+    phone_validator = RegexValidator(
+        regex=r'^09\d{9}$',
+        message='شماره تلفن همراه باید به صورت 09xxxxxxxxx باشد'
     )
-    is_read = models.BooleanField(default=False, verbose_name="خوانده شده")
-    is_sent_sms = models.BooleanField(default=False, verbose_name="پیامک ارسال شده")
-    is_sent_email = models.BooleanField(default=False, verbose_name="ایمیل ارسال شده")
-    action_url = models.URLField(blank=True, verbose_name="لینک اقدام")
-    data = models.JSONField(default=dict, blank=True, verbose_name="داده‌های اضافی")
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name="زمان ایجاد")
-
+    
+    phone_number = models.CharField(
+        max_length=11, 
+        validators=[phone_validator],
+        verbose_name='شماره تلفن همراه'
+    )
+    code = models.CharField(max_length=6, verbose_name='کد تأیید')
+    expires_at = models.DateTimeField(verbose_name='تاریخ انقضا')
+    is_used = models.BooleanField(default=False, verbose_name='استفاده شده')
+    
+    # Tracking fields for security
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    attempts = models.PositiveIntegerField(default=0, verbose_name='تعداد تلاش')
+    
     class Meta:
-        verbose_name = "اعلان کاربر"
-        verbose_name_plural = "اعلان‌های کاربران"
+        verbose_name = 'کد تأیید'
+        verbose_name_plural = 'کدهای تأیید'
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['user', 'is_read']),
-            models.Index(fields=['notification_type']),
-            models.Index(fields=['created_at']),
+            models.Index(fields=['phone_number', 'code']),
+            models.Index(fields=['expires_at']),
+            models.Index(fields=['is_used']),
         ]
-
+    
     def __str__(self):
-        return f"{self.user.first_name} - {self.title}"
+        return f'{self.phone_number} - {self.code}'
+    
+    def is_expired(self):
+        from django.utils import timezone
+        return timezone.now() > self.expires_at
+    
+    def is_valid(self):
+        return not self.is_used and not self.is_expired()
 
-    def mark_as_read(self):
-        self.is_read = True
-        self.save(update_fields=['is_read'])
 
-
-class UserAddress(models.Model):
+class UserProfile(TimestampMixin):
     """
-    User addresses for shipping
+    Extended user profile for store owners and customers
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='addresses')
-    title = models.CharField(max_length=100, verbose_name="عنوان آدرس")
-    recipient_name = models.CharField(max_length=100, verbose_name="نام گیرنده")
-    recipient_phone = models.CharField(max_length=15, verbose_name="تلفن گیرنده")
-    address = models.TextField(verbose_name="آدرس کامل")
-    city = models.CharField(max_length=100, verbose_name="شهر")
-    state = models.CharField(max_length=100, verbose_name="استان")
-    postal_code = models.CharField(max_length=10, verbose_name="کد پستی")
-    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
-    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
-    is_default = models.BooleanField(default=False, verbose_name="آدرس پیش‌فرض")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
+    user = models.OneToOneField('auth.User', on_delete=models.CASCADE, related_name='userprofile')
+    
+    # Contact information
+    phone_validator = RegexValidator(
+        regex=r'^09\d{9}$',
+        message='شماره تلفن همراه باید به صورت 09xxxxxxxxx باشد'
+    )
+    phone_number = models.CharField(
+        max_length=11, 
+        unique=True,
+        validators=[phone_validator],
+        verbose_name='شماره تلفن همراه'
+    )
+    
+    # Personal information
+    first_name = models.CharField(max_length=50, blank=True, verbose_name='نام')
+    last_name = models.CharField(max_length=50, blank=True, verbose_name='نام خانوادگی')
+    national_id = models.CharField(
+        max_length=10, 
+        blank=True, 
+        validators=[RegexValidator(r'^\d{10}$', 'کد ملی باید ۱۰ رقم باشد')],
+        verbose_name='کد ملی'
+    )
+    
+    # Business information
+    business_name = models.CharField(max_length=100, blank=True, verbose_name='نام تجاری')
+    business_type = models.CharField(max_length=50, blank=True, verbose_name='نوع کسب‌وکار')
+    
+    # Address
+    address = models.TextField(blank=True, verbose_name='آدرس')
+    city = models.CharField(max_length=50, blank=True, verbose_name='شهر')
+    state = models.CharField(max_length=50, blank=True, verbose_name='استان')
+    postal_code = models.CharField(max_length=10, blank=True, verbose_name='کد پستی')
+    
+    # Profile status
+    is_store_owner = models.BooleanField(default=False, verbose_name='صاحب فروشگاه')
+    is_verified = models.BooleanField(default=False, verbose_name='تأیید شده')
+    is_active = models.BooleanField(default=True, verbose_name='فعال')
+    
+    # Avatar
+    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True, verbose_name='تصویر پروفایل')
+    
+    # Settings
+    email_notifications = models.BooleanField(default=True, verbose_name='اعلان‌های ایمیل')
+    sms_notifications = models.BooleanField(default=True, verbose_name='اعلان‌های پیامک')
+    
+    # Verification dates
+    phone_verified_at = models.DateTimeField(null=True, blank=True)
+    email_verified_at = models.DateTimeField(null=True, blank=True)
+    business_verified_at = models.DateTimeField(null=True, blank=True)
+    
     class Meta:
-        verbose_name = "آدرس کاربر"
-        verbose_name_plural = "آدرس‌های کاربران"
-        ordering = ['-is_default', '-created_at']
+        verbose_name = 'پروفایل کاربر'
+        verbose_name_plural = 'پروفایل‌های کاربران'
         indexes = [
-            models.Index(fields=['user', 'is_default']),
-            models.Index(fields=['city', 'state']),
+            models.Index(fields=['phone_number']),
+            models.Index(fields=['is_store_owner']),
+            models.Index(fields=['is_verified']),
+            models.Index(fields=['business_name']),
         ]
-
+    
     def __str__(self):
-        return f"{self.user.first_name} - {self.title}"
+        if self.first_name and self.last_name:
+            return f'{self.first_name} {self.last_name}'
+        elif self.business_name:
+            return self.business_name
+        return self.phone_number
+    
+    @property
+    def full_name(self):
+        if self.first_name and self.last_name:
+            return f'{self.first_name} {self.last_name}'
+        return self.business_name or self.phone_number
+    
+    def verify_phone(self):
+        """Mark phone as verified"""
+        from django.utils import timezone
+        self.phone_verified_at = timezone.now()
+        self.save(update_fields=['phone_verified_at'])
+    
+    def verify_business(self):
+        """Mark business as verified"""
+        from django.utils import timezone
+        self.business_verified_at = timezone.now()
+        self.is_verified = True
+        self.save(update_fields=['business_verified_at', 'is_verified'])
 
-    def save(self, *args, **kwargs):
-        # Ensure only one default address per user
-        if self.is_default:
-            UserAddress.objects.filter(
-                user=self.user, 
-                is_default=True
-            ).exclude(id=self.id).update(is_default=False)
-        super().save(*args, **kwargs)
 
-
-class UserPreferences(models.Model):
+class LoginAttempt(TimestampMixin):
     """
-    User preferences and settings
+    Track login attempts for security
     """
-    user = models.OneToOneField(
-        User, 
-        on_delete=models.CASCADE, 
-        related_name='preferences',
-        primary_key=True
-    )
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
-    # Language and locale
-    language = models.CharField(
-        max_length=5, 
-        default='fa',
-        choices=[('fa', 'فارسی'), ('en', 'English')],
-        verbose_name="زبان"
-    )
-    timezone = models.CharField(
-        max_length=50, 
-        default='Asia/Tehran',
-        verbose_name="منطقه زمانی"
-    )
+    phone_number = models.CharField(max_length=11, verbose_name='شماره تلفن')
+    ip_address = models.GenericIPAddressField(verbose_name='آدرس IP')
+    user_agent = models.TextField(verbose_name='User Agent')
+    success = models.BooleanField(default=False, verbose_name='موفق')
+    failure_reason = models.CharField(max_length=100, blank=True, verbose_name='دلیل عدم موفقیت')
     
-    # Notification preferences
-    email_notifications = models.BooleanField(default=True, verbose_name="اعلان‌های ایمیل")
-    sms_notifications = models.BooleanField(default=True, verbose_name="اعلان‌های پیامکی")
-    push_notifications = models.BooleanField(default=True, verbose_name="اعلان‌های فوری")
-    marketing_emails = models.BooleanField(default=False, verbose_name="ایمیل‌های تبلیغاتی")
-    
-    # Shopping preferences
-    currency = models.CharField(
-        max_length=3, 
-        default='IRR',
-        choices=[('IRR', 'ریال'), ('USD', 'دلار')],
-        verbose_name="واحد پول"
-    )
-    default_payment_method = models.CharField(
-        max_length=50, 
-        blank=True,
-        verbose_name="روش پرداخت پیش‌فرض"
-    )
-    
-    # Privacy settings
-    profile_visibility = models.CharField(
-        max_length=20,
-        default='private',
-        choices=[
-            ('public', 'عمومی'),
-            ('friends', 'دوستان'),
-            ('private', 'خصوصی')
-        ],
-        verbose_name="نمایش پروفایل"
-    )
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
-        verbose_name = "تنظیمات کاربر"
-        verbose_name_plural = "تنظیمات کاربران"
-
+        verbose_name = 'تلاش ورود'
+        verbose_name_plural = 'تلاش‌های ورود'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['phone_number', '-created_at']),
+            models.Index(fields=['ip_address', '-created_at']),
+            models.Index(fields=['success']),
+        ]
+    
     def __str__(self):
-        return f"تنظیمات {self.user.first_name} {self.user.last_name}"
+        return f'{self.phone_number} - {"موفق" if self.success else "ناموفق"}'
 
 
-# Signal handlers to create related models
+# Signal handlers for user creation
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.contrib.auth.models import User
 
 @receiver(post_save, sender=User)
-def create_user_preferences(sender, instance, created, **kwargs):
-    """Create user preferences when user is created"""
-    if created:
-        UserPreferences.objects.get_or_create(user=instance)
+def create_user_profile(sender, instance, created, **kwargs):
+    """Create UserProfile when User is created"""
+    if created and not hasattr(instance, 'userprofile'):
+        UserProfile.objects.create(user=instance)
