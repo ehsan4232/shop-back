@@ -8,6 +8,7 @@ from django.core.cache import cache
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from .models import (
     AttributeType, Tag, ProductClass, ProductClassAttribute,
     ProductCategory, ProductAttribute, Brand,
@@ -199,7 +200,10 @@ class TagViewSet(StoreFilterMixin, viewsets.ModelViewSet):
         return queryset
 
 class ProductClassViewSet(StoreFilterMixin, viewsets.ModelViewSet):
-    """Product class hierarchy management ViewSet"""
+    """
+    Enhanced Product class hierarchy management ViewSet
+    CONSOLIDATED: Merged enhanced_views functionality
+    """
     serializer_class = ProductClassSerializer
     # FIX: Changed from AllowAny to proper permissions
     permission_classes = [IsStoreOwnerOrReadOnly]
@@ -230,6 +234,55 @@ class ProductClassViewSet(StoreFilterMixin, viewsets.ModelViewSet):
             'children',
             'attributes__attribute_type'
         ).select_related('parent')
+    
+    @action(detail=True, methods=['get'])
+    def can_create_products(self, request, pk=None):
+        """
+        Check if this product class can create product instances
+        Product description: "Instance Creation: Only from leaf nodes"
+        ADDED: From enhanced_views.py
+        """
+        product_class = get_object_or_404(ProductClass, pk=pk, store=request.user.store)
+        
+        can_create, message = product_class.can_create_product_instances()
+        
+        return Response({
+            'can_create': can_create,
+            'message': message,
+            'is_leaf': product_class.is_leaf,
+            'children_count': product_class.get_children().count(),
+            'products_count': product_class.products.count()
+        })
+
+    @action(detail=True, methods=['get'])
+    def inherited_attributes(self, request, pk=None):
+        """
+        Get all inherited attributes from ancestors
+        ADDED: From enhanced_views.py
+        """
+        product_class = get_object_or_404(ProductClass, pk=pk, store=request.user.store)
+        
+        inherited_attrs = product_class.get_inherited_attributes()
+        
+        # Serialize the attributes
+        attrs_data = []
+        for attr in inherited_attrs:
+            attrs_data.append({
+                'id': attr.id,
+                'name': attr.attribute_type.name,
+                'name_fa': attr.attribute_type.name_fa,
+                'data_type': attr.attribute_type.data_type,
+                'is_required': attr.is_required,
+                'default_value': attr.default_value,
+                'from_class': attr.product_class.name_fa,
+                'is_categorizer': attr.is_categorizer
+            })
+        
+        return Response({
+            'inherited_attributes': attrs_data,
+            'effective_price': product_class.get_effective_price(),
+            'inherited_media': product_class.get_inherited_media()
+        })
 
 class CategoryViewSet(StoreFilterMixin, viewsets.ModelViewSet):
     """Category management ViewSet"""
@@ -274,7 +327,10 @@ class BrandViewSet(StoreFilterMixin, viewsets.ModelViewSet):
         return super().get_queryset().filter(is_active=True)
 
 class ProductViewSet(StoreFilterMixin, viewsets.ModelViewSet):
-    """Product management ViewSet"""
+    """
+    Enhanced Product management ViewSet
+    CONSOLIDATED: Merged all enhanced_views functionality
+    """
     # FIX: Changed from AllowAny to proper permissions
     permission_classes = [IsStoreOwnerOrReadOnly]
     lookup_field = 'slug'
@@ -407,6 +463,154 @@ class ProductViewSet(StoreFilterMixin, viewsets.ModelViewSet):
             return Response(results)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'])
+    def stock_warning(self, request, pk=None):
+        """
+        Get stock warning data for a product
+        Product description: "warning for store customer when the count is less than 3"
+        ADDED: From enhanced_views.py
+        """
+        product = get_object_or_404(Product, pk=pk, store=request.user.store)
+        
+        # Get stock warning data from model methods
+        stock_data = {
+            'needs_warning': product.needs_stock_warning(),
+            'warning_message': product.get_stock_warning_message(),
+            'stock_quantity': product.stock_quantity,
+            'is_in_stock': product.in_stock,
+            'is_low_stock': product.is_low_stock,
+            'threshold': product.low_stock_threshold
+        }
+        
+        # For variable products, check variants
+        if product.product_type == 'variable':
+            variant_warnings = []
+            for variant in product.variants.filter(is_active=True):
+                variant_warnings.append({
+                    'variant_id': variant.id,
+                    'variant_sku': variant.sku,
+                    'needs_warning': variant.needs_stock_warning(),
+                    'warning_message': variant.get_stock_warning_message(),
+                    'stock_quantity': variant.stock_quantity
+                })
+            stock_data['variants'] = variant_warnings
+        
+        return Response(stock_data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def import_social_media(self, request, pk=None):
+        """
+        Import content from social media platforms
+        Product description: "Get from social media" button functionality
+        ADDED: From enhanced_views.py with improvements
+        """
+        product = get_object_or_404(Product, pk=pk, store=request.user.store)
+        
+        platform = request.data.get('platform')  # 'telegram' or 'instagram'
+        source_id = request.data.get('source_id')  # username/channel
+        
+        if not platform or not source_id:
+            return Response(
+                {'error': 'پلتفرم و شناسه منبع الزامی است'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Import social media service
+            from apps.social_media.services import SocialMediaImporter
+            
+            importer = SocialMediaImporter()
+            posts_data = importer.import_from_platform(platform, source_id)
+            
+            # Store the imported data
+            product.import_from_social_media(platform, {
+                'source_id': source_id,
+                'posts': posts_data,
+                'imported_at': timezone.now().isoformat()
+            })
+            
+            return Response({
+                'message': f'با موفقیت از {platform} وارد شد',
+                'posts_count': len(posts_data.get('data', [])),
+                'social_data': posts_data
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {'error': f'خطا در واردکردن از {platform}: {str(e)}'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['get'])
+    def low_stock(self, request):
+        """
+        Get products with low stock for store management
+        ADDED: From enhanced_views.py
+        """
+        low_stock_products = self.get_queryset().filter(
+            stock_quantity__lte=F('low_stock_threshold'),
+            manage_stock=True,
+            status='published'
+        ).order_by('stock_quantity')
+        
+        serializer = self.get_serializer(low_stock_products, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def duplicate(self, request, pk=None):
+        """
+        Duplicate a product instance for the "create another" functionality
+        Product description: "checkbox for creating another instance with same info"
+        ADDED: From enhanced_views.py
+        """
+        original_product = get_object_or_404(Product, pk=pk, store=request.user.store)
+        
+        # Create a copy with modified fields
+        new_product_data = {
+            'product_class': original_product.product_class,
+            'category': original_product.category,
+            'brand': original_product.brand,
+            'name': request.data.get('name', f"{original_product.name} - کپی"),
+            'name_fa': request.data.get('name_fa', f"{original_product.name_fa} - کپی"),
+            'description': original_product.description,
+            'short_description': original_product.short_description,
+            'base_price': request.data.get('base_price', original_product.base_price),
+            'compare_price': original_product.compare_price,
+            'cost_price': original_product.cost_price,
+            'stock_quantity': request.data.get('stock_quantity', 0),
+            'manage_stock': original_product.manage_stock,
+            'low_stock_threshold': original_product.low_stock_threshold,
+            'weight': original_product.weight,
+            'product_type': original_product.product_type,
+            'status': 'draft',  # Always start as draft
+            'store': request.user.store
+        }
+        
+        try:
+            # Create new product
+            new_product = Product.objects.create(**new_product_data)
+            
+            # Copy tags
+            new_product.tags.set(original_product.tags.all())
+            
+            # Copy attribute values
+            for attr_value in original_product.attribute_values.all():
+                attr_value.pk = None  # Create new instance
+                attr_value.product = new_product
+                attr_value.save()
+            
+            serializer = self.get_serializer(new_product)
+            return Response({
+                'message': 'محصول با موفقیت کپی شد',
+                'product': serializer.data
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response(
+                {'error': f'خطا در کپی کردن محصول: {str(e)}'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 class CollectionViewSet(StoreFilterMixin, viewsets.ModelViewSet):
     """Collection management ViewSet"""
