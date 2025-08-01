@@ -1,0 +1,189 @@
+{% load widget_tweaks %}
+
+<div class="color-pad-wrapper" data-color-pad>
+    <div class="color-input-section">
+        <input {{ widget.attrs|add_class:"form-control color-pad-input" }}
+               type="text" 
+               name="{{ widget.name }}" 
+               value="{{ widget.value|default:'#007bff' }}"
+               {% if widget.attrs.id %}id="{{ widget.attrs.id }}"{% endif %}
+               {% if widget.required %}required{% endif %}
+               placeholder="#007bff"
+               maxlength="7">
+        
+        <div class="color-preview-pad" style="background-color: {{ widget.value|default:'#007bff' }}"></div>
+    </div>
+    
+    <!-- Predefined Color Palette -->
+    <div class="color-palette">
+        <div class="palette-title">رنگ‌های پیش‌فرض:</div>
+        <div class="color-grid">
+            <button type="button" class="color-option" data-color="#FF0000" style="background-color: #FF0000" title="قرمز"></button>
+            <button type="button" class="color-option" data-color="#00FF00" style="background-color: #00FF00" title="سبز"></button>
+            <button type="button" class="color-option" data-color="#0000FF" style="background-color: #0000FF" title="آبی"></button>
+            <button type="button" class="color-option" data-color="#FFFF00" style="background-color: #FFFF00" title="زرد"></button>
+            <button type="button" class="color-option" data-color="#FF00FF" style="background-color: #FF00FF" title="بنفش"></button>
+            <button type="button" class="color-option" data-color="#00FFFF" style="background-color: #00FFFF" title="فیروزه‌ای"></button>
+            <button type="button" class="color-option" data-color="#FFA500" style="background-color: #FFA500" title="نارنجی"></button>
+            <button type="button" class="color-option" data-color="#800080" style="background-color: #800080" title="ارغوانی"></button>
+            <button type="button" class="color-option" data-color="#FFC0CB" style="background-color: #FFC0CB" title="صورتی"></button>
+            <button type="button" class="color-option" data-color="#A52A2A" style="background-color: #A52A2A" title="قهوه‌ای"></button>
+            <button type="button" class="color-option" data-color="#808080" style="background-color: #808080" title="خاکستری"></button>
+            <button type="button" class="color-option" data-color="#000000" style="background-color: #000000" title="مشکی"></button>
+            <button type="button" class="color-option" data-color="#FFFFFF" style="background-color: #FFFFFF; border: 1px solid #ddd;" title="سفید"></button>
+        </div>
+    </div>
+    
+    <!-- Custom Color Picker -->
+    <div class="custom-picker-section">
+        <label>انتخاب رنگ سفارشی:</label>
+        <input type="color" class="custom-color-picker" value="{{ widget.value|default:'#007bff' }}">
+    </div>
+</div>
+
+<style>
+.color-pad-wrapper {
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background-color: #f9f9f9;
+    direction: ltr;
+}
+
+.color-input-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.color-pad-input {
+    width: 120px;
+    font-family: monospace;
+    text-align: center;
+}
+
+.color-preview-pad {
+    width: 50px;
+    height: 40px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    background-color: #007bff;
+}
+
+.palette-title {
+    font-size: 14px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    direction: rtl;
+}
+
+.color-grid {
+    display: grid;
+    grid-template-columns: repeat(13, 1fr);
+    gap: 5px;
+    margin-bottom: 15px;
+}
+
+.color-option {
+    width: 30px;
+    height: 30px;
+    border: 2px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.color-option:hover {
+    transform: scale(1.1);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.color-option.selected {
+    border-color: #007bff;
+    border-width: 3px;
+    box-shadow: 0 0 0 2px rgba(0,123,255,0.3);
+}
+
+.custom-picker-section {
+    direction: rtl;
+}
+
+.custom-picker-section label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.custom-color-picker {
+    width: 60px;
+    height: 40px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    cursor: pointer;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const colorPadWrapper = document.querySelector('[data-color-pad]');
+    if (!colorPadWrapper) return;
+    
+    const colorInput = colorPadWrapper.querySelector('.color-pad-input');
+    const colorPreview = colorPadWrapper.querySelector('.color-preview-pad');
+    const colorOptions = colorPadWrapper.querySelectorAll('.color-option');
+    const customPicker = colorPadWrapper.querySelector('.custom-color-picker');
+    
+    function updateColor(color) {
+        colorInput.value = color;
+        colorPreview.style.backgroundColor = color;
+        customPicker.value = color;
+        
+        // Update selected option
+        colorOptions.forEach(option => {
+            option.classList.remove('selected');
+            if (option.dataset.color === color) {
+                option.classList.add('selected');
+            }
+        });
+    }
+    
+    // Handle predefined color selection
+    colorOptions.forEach(option => {
+        option.addEventListener('click', function() {
+            updateColor(this.dataset.color);
+        });
+    });
+    
+    // Handle custom color picker
+    customPicker.addEventListener('input', function() {
+        updateColor(this.value.toUpperCase());
+    });
+    
+    // Handle manual input
+    colorInput.addEventListener('input', function() {
+        const color = this.value.toUpperCase();
+        if (/^#[0-9A-F]{6}$/i.test(color)) {
+            colorPreview.style.backgroundColor = color;
+            customPicker.value = color;
+            
+            // Check if matches predefined color
+            colorOptions.forEach(option => {
+                option.classList.remove('selected');
+                if (option.dataset.color === color) {
+                    option.classList.add('selected');
+                }
+            });
+        }
+    });
+    
+    // Initialize selected state
+    const currentColor = colorInput.value || '#007bff';
+    colorOptions.forEach(option => {
+        if (option.dataset.color === currentColor) {
+            option.classList.add('selected');
+        }
+    });
+});
+</script>
