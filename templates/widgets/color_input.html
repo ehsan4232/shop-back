@@ -1,0 +1,88 @@
+{% load widget_tweaks %}
+
+<div class="color-input-wrapper" data-color-input>
+    <div class="color-display">
+        <input {{ widget.attrs|add_class:"form-control color-picker-input" }}
+               type="color" 
+               name="{{ widget.name }}" 
+               value="{{ widget.value|default:'#007bff' }}"
+               {% if widget.attrs.id %}id="{{ widget.attrs.id }}"{% endif %}
+               {% if widget.required %}required{% endif %}>
+        
+        <div class="color-preview" style="background-color: {{ widget.value|default:'#007bff' }}"></div>
+    </div>
+    
+    <div class="color-info">
+        <input type="text" 
+               class="form-control color-hex-input" 
+               value="{{ widget.value|default:'#007bff' }}" 
+               placeholder="#007bff"
+               maxlength="7">
+    </div>
+</div>
+
+<style>
+.color-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    direction: ltr;
+}
+
+.color-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.color-picker-input {
+    width: 60px;
+    height: 40px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    cursor: pointer;
+    padding: 0;
+    background: none;
+}
+
+.color-preview {
+    width: 40px;
+    height: 40px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    background-color: #007bff;
+}
+
+.color-hex-input {
+    width: 100px;
+    font-family: monospace;
+    text-align: center;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const colorWrapper = document.querySelector('[data-color-input]');
+    if (!colorWrapper) return;
+    
+    const colorPicker = colorWrapper.querySelector('.color-picker-input');
+    const colorPreview = colorWrapper.querySelector('.color-preview');
+    const hexInput = colorWrapper.querySelector('.color-hex-input');
+    
+    // Update preview and hex when color picker changes
+    colorPicker.addEventListener('input', function() {
+        const color = this.value;
+        colorPreview.style.backgroundColor = color;
+        hexInput.value = color;
+    });
+    
+    // Update picker and preview when hex input changes
+    hexInput.addEventListener('input', function() {
+        const color = this.value;
+        if (/^#[0-9A-F]{6}$/i.test(color)) {
+            colorPicker.value = color;
+            colorPreview.style.backgroundColor = color;
+        }
+    });
+});
+</script>
