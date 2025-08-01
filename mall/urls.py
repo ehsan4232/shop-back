@@ -14,7 +14,7 @@ api_v1_patterns = [
     
     # Core Features
     path('products/', include('apps.products.urls')),
-    path('stores/', include('apps.stores.urls')),  # Themes are included in stores
+    path('stores/', include('apps.stores.urls')),
     path('orders/', include('apps.orders.urls')),
     
     # Additional Features
@@ -23,6 +23,7 @@ api_v1_patterns = [
     path('communications/', include('apps.communications.urls')),
     path('logistics/', include('apps.logistics.urls')),
     path('analytics/', include('apps.analytics.urls')),
+    path('themes/', include('apps.themes.urls')),  # ADDED: Separate themes management
 ]
 
 urlpatterns = [
