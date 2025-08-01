@@ -41,3 +41,5 @@ colorfield==0.11.0
 sorl-thumbnail==12.10.0
 django-crispy-forms==2.3
 crispy-bootstrap5==2024.10
+django-widget-tweaks==1.5.0
+django-filters==24.3
