@@ -39,7 +39,7 @@ THIRD_PARTY_APPS = [
     'mptt',
     'django_otp',
     'storages',
-    'colorfield',  # For color picker functionality
+    'widget_tweaks',  # For form widgets
 ]
 
 LOCAL_APPS = [
@@ -53,7 +53,8 @@ LOCAL_APPS = [
     'apps.core',  # Core mixins and utilities
     'apps.logistics',  # Logistics providers integration
     'apps.analytics',  # Analytics and dashboard system
-    # Note: themes are integrated in apps.stores, no separate themes app needed
+    'apps.themes',  # ADDED: Theme management system per product description
+    'apps.tenants',  # Multi-tenancy support
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -235,6 +236,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Social Media', 'description': 'Social media integration endpoints'},
         {'name': 'Logistics', 'description': 'Logistics provider endpoints'},
         {'name': 'Analytics', 'description': 'Analytics and dashboard endpoints'},
+        {'name': 'Themes', 'description': 'Theme management endpoints'},  # ADDED
     ],
 }
 
